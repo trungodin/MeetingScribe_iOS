@@ -261,11 +261,15 @@ public class DocxExporter {
 private extension Data {
     mutating func appendUInt16(_ value: UInt16) {
         var v = value.littleEndian
-        append(UnsafeBufferPointer(start: &v, count: 1))
+        Swift.withUnsafeBytes(of: &v) { ptr in
+            append(contentsOf: ptr)
+        }
     }
 
     mutating func appendUInt32(_ value: UInt32) {
         var v = value.littleEndian
-        append(UnsafeBufferPointer(start: &v, count: 1))
+        Swift.withUnsafeBytes(of: &v) { ptr in
+            append(contentsOf: ptr)
+        }
     }
 }
