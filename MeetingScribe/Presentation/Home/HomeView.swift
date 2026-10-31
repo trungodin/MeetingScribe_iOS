@@ -269,3 +269,47 @@ struct DocumentPicker: UIViewControllerRepresentable {
         }
     }
 }
+
+public struct MeetingRowView: View {
+    let meeting: Meeting
+
+    public init(meeting: Meeting) {
+        self.meeting = meeting
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(meeting.title)
+                .font(.headline)
+                .foregroundColor(.primary)
+
+            HStack {
+                Label(meeting.formattedCreatedAt, systemImage: "calendar")
+                Spacer()
+                Label(meeting.formattedDuration, systemImage: "clock")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+
+            Text(meeting.status.displayName)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(statusColor.opacity(0.15))
+                .foregroundColor(statusColor)
+                .cornerRadius(6)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var statusColor: Color {
+        switch meeting.status {
+        case .recorded: return .gray
+        case .transcribing, .summarizing: return .orange
+        case .transcribed: return .blue
+        case .summarized: return .purple
+        case .exported: return .green
+        }
+    }
+}

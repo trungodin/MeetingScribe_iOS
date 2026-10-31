@@ -83,9 +83,9 @@ public struct DetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if let path = meeting?.exportFilePath, !path.isEmpty {
+                if let m = meeting, !m.exportFilePath.isEmpty {
                     Button(action: {
-                        exportedFileURL = URL(fileURLWithPath: path)
+                        exportedFileURL = URL(fileURLWithPath: m.exportFilePath)
                         showingShareSheet = true
                     }) {
                         Image(systemName: "square.and.arrow.up")
@@ -393,8 +393,8 @@ public struct DetailView: View {
 
             // Nút Chia sẻ
             Button(action: {
-                if let path = meeting.exportFilePath, !path.isEmpty {
-                    exportedFileURL = URL(fileURLWithPath: path)
+                if !meeting.exportFilePath.isEmpty {
+                    exportedFileURL = URL(fileURLWithPath: meeting.exportFilePath)
                     showingShareSheet = true
                 }
             }) {

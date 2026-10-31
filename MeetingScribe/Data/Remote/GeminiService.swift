@@ -165,3 +165,4 @@ public class GeminiService {
         return str.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
