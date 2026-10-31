@@ -88,7 +88,8 @@ public class WhisperModelManager: ObservableObject {
     }
 
     public func getActiveModelURL() -> URL? {
-        for variant in Variant.allCases {
+        // Ưu tiên Small nếu đã tải, sau đó mới đến Base
+        for variant in [Variant.smallQ5_1, Variant.baseQ5_1] {
             if isModelReady(for: variant) {
                 return getModelPath(for: variant)
             }
@@ -97,7 +98,8 @@ public class WhisperModelManager: ObservableObject {
     }
 
     public func refreshModelStatus() {
-        for variant in Variant.allCases {
+        // Kiểm tra Small trước, nếu có thì hiển thị Small
+        for variant in [Variant.smallQ5_1, Variant.baseQ5_1] {
             let path = getModelPath(for: variant)
             if FileManager.default.fileExists(atPath: path.path),
                let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
@@ -207,3 +209,4 @@ private class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
         }
     }
 }
+

@@ -117,3 +117,4 @@ public class WhisperEngine {
         return "Bản ghi âm đã được nhận dạng thành công bằng mô hình Whisper Offline trên thiết bị."
     }
 }
+

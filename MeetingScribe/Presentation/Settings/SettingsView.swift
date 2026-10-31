@@ -120,26 +120,50 @@ public struct SettingsView: View {
 
                 // MARK: 2.1 Quản lý Model Whisper Offline
                 Section(header: Label("Model Whisper Offline (Trên máy)", systemImage: "arrow.down.circle")) {
-                    if !modelManager.downloadedModelName.isEmpty {
+                    ForEach(WhisperModelManager.Variant.allCases) { variant in
+                        let isReady = modelManager.isModelReady(for: variant)
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(modelManager.downloadedModelName)
+                                Text(variant.displayName)
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                Text("Đã cài đặt (\(modelManager.downloadedModelSizeText))")
+                                Text(variant.note)
                                     .font(.caption2)
-                                    .foregroundColor(.green)
+                                    .foregroundColor(.secondary)
                             }
+
                             Spacer()
-                            Button("Xóa", role: .destructive) {
-                                modelManager.deleteModel()
+
+                            if isReady {
+                                HStack(spacing: 8) {
+                                    Text("Đã có (\(variant.approxSizeText))")
+                                        .font(.caption2)
+                                        .foregroundColor(.green)
+
+                                    Button("Xóa", role: .destructive) {
+                                        let path = modelManager.getModelPath(for: variant)
+                                        try? FileManager.default.removeItem(at: path)
+                                        modelManager.refreshModelStatus()
+                                    }
+                                    .font(.caption)
+                                }
+                            } else {
+                                Button(action: { modelManager.downloadModel(variant: variant) }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.down")
+                                        Text("Tải (\(variant.approxSizeText))")
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                                }
+                                .disabled(modelManager.isDownloading)
                             }
-                            .font(.caption)
                         }
-                    } else {
-                        Text("Chưa có model nào trên máy.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        .padding(.vertical, 4)
                     }
 
                     if modelManager.isDownloading {
@@ -149,24 +173,7 @@ public struct SettingsView: View {
                                 .font(.caption2)
                                 .foregroundColor(.blue)
                         }
-                    } else if modelManager.downloadedModelName.isEmpty {
-                        VStack(spacing: 8) {
-                            Button(action: { modelManager.downloadModel(variant: .baseQ5_1) }) {
-                                HStack {
-                                    Image(systemName: "arrow.down")
-                                    Text("Tải Whisper Base (~57MB - Nhanh)")
-                                }
-                                .font(.subheadline)
-                            }
-
-                            Button(action: { modelManager.downloadModel(variant: .smallQ5_1) }) {
-                                HStack {
-                                    Image(systemName: "arrow.down")
-                                    Text("Tải Whisper Small (~181MB - Chuẩn)")
-                                }
-                                .font(.subheadline)
-                            }
-                        }
+                        .padding(.vertical, 4)
                     }
 
                     if let err = modelManager.downloadError {
