@@ -16,7 +16,9 @@ public struct SettingsView: View {
 
     // AI Provider & ASR Engine
     @State private var selectedAiProvider: String = "DEEPSEEK" // "DEEPSEEK" hoặc "GEMINI"
-    @State private var selectedAsrEngine: String = "GROQ"       // "GROQ" hoặc "GEMINI"
+    @State private var selectedAsrEngine: String = "GROQ"       // "GROQ", "GEMINI", "WHISPER"
+
+    @ObservedObject private var modelManager = WhisperModelManager.shared
 
     // API Keys
     @State private var groqKey: String = ""
@@ -81,8 +83,9 @@ public struct SettingsView: View {
                 // MARK: 2. Mô hình nhận dạng giọng nói ASR
                 Section(header: Label("Nhận dạng giọng nói (ASR)", systemImage: "waveform")) {
                     Picker("Mô hình ASR", selection: $selectedAsrEngine) {
-                        Text("Groq · Whisper Turbo").tag("GROQ")
-                        Text("Google Gemini Flash").tag("GEMINI")
+                        Text("Groq Turbo").tag("GROQ")
+                        Text("Gemini").tag("GEMINI")
+                        Text("Whisper Offline").tag("WHISPER")
                     }
                     .pickerStyle(.segmented)
 
@@ -99,10 +102,77 @@ public struct SettingsView: View {
                                 .font(.caption)
                                 .padding(.top, 2)
                         }
-                    } else {
+                    } else if selectedAsrEngine == "GEMINI" {
                         Text("Google Gemini ASR Flash (Hỗ trợ audio trực tiếp).")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Whisper Offline (Không cần mạng Internet)")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("Nhận dạng trực tiếp trên chip của iPhone. Cần tải model GGML ở mục bên dưới.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                // MARK: 2.1 Quản lý Model Whisper Offline
+                Section(header: Label("Model Whisper Offline (Trên máy)", systemImage: "arrow.down.circle")) {
+                    if !modelManager.downloadedModelName.isEmpty {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(modelManager.downloadedModelName)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text("Đã cài đặt (\(modelManager.downloadedModelSizeText))")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
+                            }
+                            Spacer()
+                            Button("Xóa", role: .destructive) {
+                                modelManager.deleteModel()
+                            }
+                            .font(.caption)
+                        }
+                    } else {
+                        Text("Chưa có model nào trên máy.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if modelManager.isDownloading {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: modelManager.downloadProgress, total: 1.0)
+                            Text("Đang tải model: \(Int(modelManager.downloadProgress * 100))%")
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                        }
+                    } else if modelManager.downloadedModelName.isEmpty {
+                        VStack(spacing: 8) {
+                            Button(action: { modelManager.downloadModel(variant: .baseQ5_1) }) {
+                                HStack {
+                                    Image(systemName: "arrow.down")
+                                    Text("Tải Whisper Base (~57MB - Nhanh)")
+                                }
+                                .font(.subheadline)
+                            }
+
+                            Button(action: { modelManager.downloadModel(variant: .smallQ5_1) }) {
+                                HStack {
+                                    Image(systemName: "arrow.down")
+                                    Text("Tải Whisper Small (~181MB - Chuẩn)")
+                                }
+                                .font(.subheadline)
+                            }
+                        }
+                    }
+
+                    if let err = modelManager.downloadError {
+                        Text(err)
+                            .font(.caption2)
+                            .foregroundColor(.red)
                     }
                 }
 

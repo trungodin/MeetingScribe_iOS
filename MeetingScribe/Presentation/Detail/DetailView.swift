@@ -626,7 +626,12 @@ public struct DetailView: View {
         Task {
             do {
                 var text = ""
-                if engine == "GEMINI" {
+                if engine == "WHISPER" {
+                    statusMessage = "Đang nhận dạng bằng Whisper Offline (trên máy)..."
+                    text = try await WhisperEngine.shared.transcribe(
+                        audioFileURL: URL(fileURLWithPath: m.audioFilePath)
+                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                } else if engine == "GEMINI" {
                     let key = KeychainManager.shared.get(key: .geminiApiKey)
                     let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
                     statusMessage = "Đang chuyển văn bản qua Google Gemini Flash..."
