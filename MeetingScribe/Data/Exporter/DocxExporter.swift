@@ -3,15 +3,14 @@
 //  MeetingScribe
 //
 //  Xuất file Word .docx đúng chuẩn thể thức văn bản hành chính Nghị định 30/2020/NĐ-CP
-//  Tương đương WordExporter.kt trên Android
+//  Tạo file OpenXML ZIP chuẩn 100% bằng Swift thuần (hỗ trợ mở hoàn hảo trên mọi ứng dụng Word, WPS, Drive, Files)
 //
 
 import Foundation
+import zlib
 
 public class DocxExporter {
     public static let shared = DocxExporter()
-
-    public static let defaultTemplateName = "bien_ban_ND30.docx"
 
     private init() {}
 
@@ -26,7 +25,6 @@ public class DocxExporter {
     ) throws -> URL {
         let fileManager = FileManager.default
 
-        // 1. Thư mục exports
         let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let exportsDir = documentsDir.appendingPathComponent("exports", isDirectory: true)
         if !fileManager.fileExists(atPath: exportsDir.path) {
@@ -40,48 +38,11 @@ public class DocxExporter {
         let fileName = "BienBan_\(cleanTitle.isEmpty ? "CuocHop" : cleanTitle)_\(timeStamp).docx"
         let destinationURL = outputPath ?? exportsDir.appendingPathComponent(fileName)
 
-        // 2. Tìm template trong Bundle
-        guard let templateURL = Bundle.main.url(forResource: "bien_ban_ND30", withExtension: "docx")
-                ?? Bundle.module.url(forResource: "bien_ban_ND30", withExtension: "docx") else {
-            // Nếu không thấy trong bundle, tạo file document docx trực tiếp
-            return try generateDirectDocx(summary: summary, organizationName: organizationName, conclusions: customConclusions ?? summary.ketLuan, destinationURL: destinationURL)
-        }
+        // 1. Chuẩn bị nội dung thay thế
+        let org = organizationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "ỦY BAN NHÂN DÂN"
+            : organizationName.uppercased()
 
-        // 3. Sao chép template ra thư mục tạm
-        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: tempDir) }
-
-        let tempZipURL = tempDir.appendingPathComponent("temp.zip")
-        try fileManager.copyItem(at: templateURL, to: tempZipURL)
-
-        // 4. Mở zip, thay thế document.xml, nén lại (hoặc render chuẩn XML nếu hệ thống hỗ trợ)
-        // Đảm bảo trả về file docx hợp lệ:
-        return try generateDirectDocx(
-            summary: summary,
-            organizationName: organizationName,
-            conclusions: customConclusions ?? summary.ketLuan,
-            destinationURL: destinationURL
-        )
-    }
-
-    /**
-     * Tạo file .docx XML chuẩn OpenXML (Word 2007+) đảm bảo mở được trên Microsoft Word, WPS, Google Docs
-     */
-    private func generateDirectDocx(
-        summary: MeetingSummary,
-        organizationName: String,
-        conclusions: [String],
-        destinationURL: URL
-    ) throws -> URL {
-        let xmlContent = buildDocumentXml(summary: summary, orgName: organizationName, conclusions: conclusions)
-        let docxData = try createDocxPackage(documentXml: xmlContent)
-        try docxData.write(to: destinationURL, options: .atomic)
-        return destinationURL
-    }
-
-    private func buildDocumentXml(summary: MeetingSummary, orgName: String, conclusions: [String]) -> String {
-        let org = orgName.isEmpty ? "ỦY BAN NHÂN DÂN" : orgName.uppercased()
         let title = summary.tenCuocHop.isEmpty ? "BIÊN BẢN CUỘC HỌP" : summary.tenCuocHop.uppercased()
         let time = summary.thoiGian.isEmpty ? "Không xác định" : summary.thoiGian
         let location = summary.diaDiem.isEmpty ? "Phòng họp cơ quan" : summary.diaDiem
@@ -89,97 +50,89 @@ public class DocxExporter {
         let secretary = summary.thuKy.isEmpty ? "Không xác định" : summary.thuKy
         let participants = summary.thanhPhan.isEmpty ? "Các thành viên tham dự" : summary.thanhPhan.joined(separator: ", ")
 
-        var discussionXml = ""
-        for (idx, item) in summary.noiDungChinh.enumerated() {
-            discussionXml += """
-            <w:p>
-                <w:pPr><w:spacing w:before="120" w:after="60"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr>
-                <w:t>\(idx + 1). \(escapeXml(item.tieuDe))</w:t></w:r>
-            </w:p>
-            <w:p>
-                <w:pPr><w:ind w:firstLine="720"/><w:jc w:val="both"/><w:spacing w:line="276" w:lineRule="auto"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr>
-                <w:t>\(escapeXml(item.noiDung))</w:t></w:r>
-            </w:p>
+        // Ngày tháng năm địa danh
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "vi_VN")
+        dateFormatter.dateFormat = "..., ngày dd tháng MM năm yyyy"
+        let dateString = dateFormatter.string(from: Date())
+
+        // 2. Tạo nội dung XML cho diễn biến và kết luận
+        let conclusionsToUse = customConclusions ?? summary.ketLuan
+        var contentXml = ""
+
+        // Phần I: Diễn biến
+        if !summary.noiDungChinh.isEmpty {
+            contentXml += """
+            <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>I. DIỄN BIẾN VÀ NỘI DUNG CUỘC HỌP</w:t></w:r></w:p>
             """
+            for (idx, item) in summary.noiDungChinh.enumerated() {
+                contentXml += """
+                <w:p><w:pPr><w:spacing w:before="120" w:after="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>\(idx + 1). \(escapeXml(item.tieuDe))</w:t></w:r></w:p>
+                <w:p><w:pPr><w:ind w:firstLine="720"/><w:jc w:val="both"/><w:spacing w:line="276" w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(item.noiDung))</w:t></w:r></w:p>
+                """
+            }
         }
 
-        var conclusionsXml = ""
-        for (idx, item) in conclusions.enumerated() {
-            conclusionsXml += """
-            <w:p>
-                <w:pPr><w:ind w:left="360"/><w:spacing w:after="60"/><w:jc w:val="both"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr>
-                <w:t>- \(idx + 1). \(escapeXml(item))</w:t></w:r>
-            </w:p>
+        // Phần II: Kết luận
+        if !conclusionsToUse.isEmpty {
+            contentXml += """
+            <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>II. KẾT LUẬN VÀ CHỈ ĐẠO CỦA CHỦ TRÌ</w:t></w:r></w:p>
             """
+            for (idx, item) in conclusionsToUse.enumerated() {
+                contentXml += """
+                <w:p><w:pPr><w:ind w:left="360"/><w:spacing w:after="60"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>- \(idx + 1). \(escapeXml(item))</w:t></w:r></w:p>
+                """
+            }
         }
 
-        return """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-        <w:body>
-            <w:tbl>
-                <w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="none"/><w:left w:val="none"/><w:bottom w:val="none"/><w:right w:val="none"/><w:insideH w:val="none"/><w:insideV w:val="none"/></w:tblBorders></w:tblPr>
-                <w:tr>
-                    <w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t>\(escapeXml(org))</w:t></w:r></w:p>
-                    </w:tc>
-                    <w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="24"/></w:rPr><w:t>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</w:t></w:r></w:p>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/><w:u w:val="single"/></w:rPr><w:t>Độc lập - Tự do - Hạnh phúc</w:t></w:r></w:p>
-                    </w:tc>
-                </w:tr>
-            </w:tbl>
-            <w:p><w:pPr><w:spacing w:before="360" w:after="120"/><w:jc w:val="center"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="32"/></w:rPr><w:t>\(escapeXml(title))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:spacing w:before="120"/><w:ind w:firstLine="720"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>Thời gian: </w:t></w:r>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(time))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:ind w:firstLine="720"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>Địa điểm: </w:t></w:r>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(location))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:ind w:firstLine="720"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>Chủ trì: </w:t></w:r>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(chair))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:ind w:firstLine="720"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>Thư ký: </w:t></w:r>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(secretary))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:ind w:firstLine="720"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>Thành phần: </w:t></w:r>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>\(escapeXml(participants))</w:t></w:r>
-            </w:p>
-            <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>I. DIỄN BIẾN VÀ NỘI DUNG CUỘC HỌP</w:t></w:r>
-            </w:p>
-            \(discussionXml)
-            <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr>
-                <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>II. KẾT LUẬN VÀ CHỈ ĐẠO CỦA CHỦ TRÌ</w:t></w:r>
-            </w:p>
-            \(conclusionsXml)
-            <w:tbl>
-                <w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="none"/><w:left w:val="none"/><w:bottom w:val="none"/><w:right w:val="none"/><w:insideH w:val="none"/><w:insideV w:val="none"/></w:tblBorders></w:tblPr>
-                <w:tr>
-                    <w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>THƯ KÝ</w:t></w:r></w:p>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:i/><w:sz w:val="24"/></w:rPr><w:t>(Ký và ghi rõ họ tên)</w:t></w:r></w:p>
-                    </w:tc>
-                    <w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="26"/></w:rPr><w:t>CHỦ TRÌ CUỘC HỌP</w:t></w:r></w:p>
-                        <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:i/><w:sz w:val="24"/></w:rPr><w:t>(Ký và ghi rõ họ tên)</w:t></w:r></w:p>
-                    </w:tc>
-                </w:tr>
-            </w:tbl>
-            <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1152" w:bottom="1440" w:left="1728" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
-        </w:body>
-        </w:document>
-        """
+        // Đề xuất nếu có
+        if !summary.deXuat.isEmpty {
+            contentXml += """
+            <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>III. ĐỀ XUẤT, KIẾN NGHỊ</w:t></w:r></w:p>
+            """
+            for (idx, item) in summary.deXuat.enumerated() {
+                contentXml += """
+                <w:p><w:pPr><w:ind w:left="360"/><w:spacing w:after="60"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>• \(escapeXml(item))</w:t></w:r></w:p>
+                """
+            }
+        }
+
+        // 3. Thay thế các placeholder vào document.xml gốc
+        var docXml = DocxTemplateData.documentXmlTemplate
+        docXml = docXml.replacingOccurrences(of: "${dia_danh_ngay_thang}", with: escapeXml(dateString))
+        docXml = docXml.replacingOccurrences(of: "${ten_cuoc_hop}", with: escapeXml(title))
+        docXml = docXml.replacingOccurrences(of: "${thoi_gian}", with: escapeXml(time))
+        docXml = docXml.replacingOccurrences(of: "${dia_diem}", with: escapeXml(location))
+        docXml = docXml.replacingOccurrences(of: "${danh_sach_thanh_phan}", with: escapeXml(participants))
+        docXml = docXml.replacingOccurrences(of: "${chu_tri}", with: escapeXml(chair))
+        docXml = docXml.replacingOccurrences(of: "${ten_chu_tri}", with: escapeXml(chair))
+        docXml = docXml.replacingOccurrences(of: "${ten_thu_ky}", with: escapeXml(secretary))
+        docXml = docXml.replacingOccurrences(of: "${thoi_gian_ket_thuc}", with: "Cuộc họp kết thúc cùng ngày.")
+
+        // Thay thế paragraph bookmark ${noi_dung_cuoc_hop} bằng chuỗi paragraph nội dung
+        let targetP = "<w:p><w:pPr><w:spacing w:after=\"200\"/><w:jc w:val=\"both\"/></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"NOI_DUNG\"/><w:r><w:rPr><w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/><w:i/><w:color w:val=\"787878\"/><w:sz w:val=\"26\"/></w:rPr><w:t>${noi_dung_cuoc_hop}</w:t></w:r><w:bookmarkEnd w:id=\"1\"/></w:p>"
+        if docXml.contains(targetP) {
+            docXml = docXml.replacingOccurrences(of: targetP, with: contentXml)
+        } else {
+            docXml = docXml.replacingOccurrences(of: "${noi_dung_cuoc_hop}", with: "")
+        }
+
+        // 4. Giải nén các file phụ thuộc của template mẫu NĐ 30
+        var allFiles: [String: Data] = [:]
+        allFiles["word/document.xml"] = docXml.data(using: .utf8) ?? Data()
+
+        for (filename, info) in DocxTemplateData.auxiliaryFiles {
+            if let compressedData = Data(base64Encoded: info.base64Compressed) {
+                let decompressed = decompressZlib(data: compressedData, uncompressedSize: info.uncompressedSize)
+                allFiles[filename] = decompressed
+            }
+        }
+
+        // 5. Đóng gói thành file ZIP .docx chuẩn
+        let zipData = createZipArchive(files: allFiles)
+        try zipData.write(to: destinationURL, options: .atomic)
+
+        return destinationURL
     }
 
     private func escapeXml(_ str: String) -> String {
@@ -190,55 +143,129 @@ public class DocxExporter {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    /**
-     * Đóng gói cấu trúc tối thiểu của file .docx (OpenXML Zip Package)
-     */
-    private func createDocxPackage(documentXml: String) throws -> Data {
-        let contentTypes = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-            <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-            <Default Extension="xml" ContentType="application/xml"/>
-            <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-        </Types>
-        """
+    // MARK: - Zlib Decompressor
 
-        let rootRels = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-            <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-        </Relationships>
-        """
+    private func decompressZlib(data: Data, uncompressedSize: Int) -> Data {
+        var dest = Data(count: uncompressedSize)
+        var destLen = uLongf(uncompressedSize)
 
-        // Tạo file tạm zip bằng FileCoordinator hoặc stream data
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("docx_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        data.withUnsafeBytes { srcBytes in
+            dest.withUnsafeMutableBytes { destBytes in
+                _ = uncompress(
+                    destBytes.bindMemory(to: Bytef.self).baseAddress,
+                    &destLen,
+                    srcBytes.bindMemory(to: Bytef.self).baseAddress,
+                    uLong(data.count)
+                )
+            }
+        }
+        dest.count = Int(destLen)
+        return dest
+    }
 
-        try contentTypes.write(to: tempDir.appendingPathComponent("[Content_Types].xml"), atomically: true, encoding: .utf8)
+    // MARK: - Pure Swift ZIP Builder (PKZip Specification)
 
-        let relsDir = tempDir.appendingPathComponent("_rels")
-        try FileManager.default.createDirectory(at: relsDir, withIntermediateDirectories: true)
-        try rootRels.write(to: relsDir.appendingPathComponent(".rels"), atomically: true, encoding: .utf8)
+    private func createZipArchive(files: [String: Data]) -> Data {
+        var records: [Data] = []
+        var cdRecords: [Data] = []
+        var offset: UInt32 = 0
 
-        let wordDir = tempDir.appendingPathComponent("word")
-        try FileManager.default.createDirectory(at: wordDir, withIntermediateDirectories: true)
-        try documentXml.write(to: wordDir.appendingPathComponent("document.xml"), atomically: true, encoding: .utf8)
+        for (filename, fileData) in files {
+            guard let nameBytes = filename.data(using: .utf8) else { continue }
+            let size = UInt32(fileData.count)
 
-        // Dùng NSFileCoordinator nén zip thư mục tempDir
-        var error: NSError?
-        var zipData: Data?
+            // Tính CRC32
+            var crcValue: UInt32 = 0
+            fileData.withUnsafeBytes { raw in
+                let ptr = raw.bindMemory(to: Bytef.self).baseAddress
+                crcValue = UInt32(crc32(0, ptr, uInt(fileData.count)))
+            }
 
-        let coordinator = NSFileCoordinator()
-        coordinator.coordinate(readingItemAt: tempDir, options: .forUploading, error: &error) { zipURL in
-            zipData = try? Data(contentsOf: zipURL)
+            // Local File Header (30 bytes + filename + data)
+            var localHeader = Data()
+            localHeader.appendUInt32(0x04034b50)  // Signature
+            localHeader.appendUInt16(20)          // Version needed
+            localHeader.appendUInt16(0)           // Flags
+            localHeader.appendUInt16(0)           // Compression: Stored (0)
+            localHeader.appendUInt16(0)           // Mod time
+            localHeader.appendUInt16(0)           // Mod date
+            localHeader.appendUInt32(crcValue)    // CRC32
+            localHeader.appendUInt32(size)        // Compressed size
+            localHeader.appendUInt32(size)        // Uncompressed size
+            localHeader.appendUInt16(UInt16(nameBytes.count)) // File name length
+            localHeader.appendUInt16(0)           // Extra field length
+            localHeader.append(nameBytes)
+            localHeader.append(fileData)
+
+            records.append(localHeader)
+
+            // Central Directory Header (46 bytes + filename)
+            var cdHeader = Data()
+            cdHeader.appendUInt32(0x02014b50)     // Signature
+            cdHeader.appendUInt16(20)             // Version made by
+            cdHeader.appendUInt16(20)             // Version needed
+            cdHeader.appendUInt16(0)              // Flags
+            cdHeader.appendUInt16(0)              // Compression: Stored (0)
+            cdHeader.appendUInt16(0)              // Mod time
+            cdHeader.appendUInt16(0)              // Mod date
+            cdHeader.appendUInt32(crcValue)       // CRC32
+            cdHeader.appendUInt32(size)           // Compressed size
+            cdHeader.appendUInt32(size)           // Uncompressed size
+            cdHeader.appendUInt16(UInt16(nameBytes.count)) // File name length
+            cdHeader.appendUInt16(0)              // Extra field length
+            cdHeader.appendUInt16(0)              // File comment length
+            cdHeader.appendUInt16(0)              // Disk number start
+            cdHeader.appendUInt16(0)              // Internal file attributes
+            cdHeader.appendUInt32(0)              // External file attributes
+            cdHeader.appendUInt32(offset)         // Relative offset of local header
+            cdHeader.append(nameBytes)
+
+            cdRecords.append(cdHeader)
+
+            offset += UInt32(localHeader.count)
         }
 
-        if let data = zipData {
-            return data
-        } else {
-            throw error ?? NSError(domain: "DocxExporter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không thể tạo file zip docx"])
+        var centralDirectoryData = Data()
+        for cd in cdRecords {
+            centralDirectoryData.append(cd)
         }
+
+        let cdSize = UInt32(centralDirectoryData.count)
+        let cdOffset = offset
+        let totalEntries = UInt16(files.count)
+
+        // End of Central Directory Record (22 bytes)
+        var eocd = Data()
+        eocd.appendUInt32(0x06054b50)             // Signature
+        eocd.appendUInt16(0)                      // Disk number
+        eocd.appendUInt16(0)                      // Disk with CD
+        eocd.appendUInt16(totalEntries)           // Entries on disk
+        eocd.appendUInt16(totalEntries)           // Total entries
+        eocd.appendUInt32(cdSize)                 // Size of CD
+        eocd.appendUInt32(cdOffset)               // Offset of CD
+        eocd.appendUInt16(0)                      // Comment length
+
+        var result = Data()
+        for rec in records {
+            result.append(rec)
+        }
+        result.append(centralDirectoryData)
+        result.append(eocd)
+
+        return result
     }
 }
 
+// MARK: - Binary Extensions
+
+private extension Data {
+    mutating func appendUInt16(_ value: UInt16) {
+        var v = value.littleEndian
+        append(UnsafeBufferPointer(start: &v, count: 1))
+    }
+
+    mutating func appendUInt32(_ value: UInt32) {
+        var v = value.littleEndian
+        append(UnsafeBufferPointer(start: &v, count: 1))
+    }
+}
