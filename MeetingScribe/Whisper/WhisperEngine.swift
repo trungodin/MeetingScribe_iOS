@@ -112,6 +112,24 @@ public class WhisperEngine {
     private func runWhisperInference(samples: [Float], modelPath: String, onProgress: ((Int) -> Void)?) async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
+                // Ticker tăng tiến độ đều đặn 50% -> 96% để giao diện luôn sống động trong suốt quá trình suy diễn
+                var currentUIProg = 50
+                let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+                timer.schedule(deadline: .now() + 0.5, repeating: 0.7)
+                timer.setEventHandler {
+                    if currentUIProg < 96 {
+                        currentUIProg += 2
+                        DispatchQueue.main.async {
+                            onProgress?(currentUIProg)
+                        }
+                    }
+                }
+                timer.resume()
+
+                defer {
+                    timer.cancel()
+                }
+
                 guard let ctx = ms_whisper_init(modelPath) else {
                     continuation.resume(throwing: NSError(domain: "WhisperEngine", code: -5, userInfo: [NSLocalizedDescriptionKey: "Không thể nạp mô hình Whisper từ: \(modelPath)"]))
                     return
@@ -120,26 +138,9 @@ public class WhisperEngine {
                     ms_whisper_free(ctx)
                 }
 
-                // Callback truyền tiến độ nhận diện thực tế từ whisper_full
-                class ProgressHolder {
-                    let onProgress: ((Int) -> Void)?
-                    init(_ cb: ((Int) -> Void)?) { self.onProgress = cb }
-                }
-                let holder = ProgressHolder(onProgress)
-                let unmanaged = Unmanaged.passUnretained(holder)
-                let userPtr = unmanaged.toOpaque()
-
-                let callback: ms_whisper_progress_callback = { nativeProg, userData in
-                    guard let userData = userData else { return }
-                    let h = Unmanaged<ProgressHolder>.fromOpaque(userData).takeUnretainedValue()
-                    // Map tiến trình whisper từ 0..100 vào dải 50..98% của thanh tiến độ
-                    let uiPercent = 50 + Int(Double(nativeProg) * 0.48)
-                    h.onProgress?(min(uiPercent, 98))
-                }
-
                 let textPtr = samples.withUnsafeBufferPointer { ptr -> UnsafeMutablePointer<CChar>? in
                     guard let baseAddr = ptr.baseAddress else { return nil }
-                    return ms_whisper_transcribe(ctx, baseAddr, Int32(samples.count), callback, userPtr)
+                    return ms_whisper_transcribe(ctx, baseAddr, Int32(samples.count), nil, nil)
                 }
 
                 guard let textPtr = textPtr else {

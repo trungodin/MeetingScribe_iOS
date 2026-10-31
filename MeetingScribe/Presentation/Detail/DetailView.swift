@@ -705,7 +705,10 @@ public struct DetailView: View {
                 }
 
                 await MainActor.run {
-                    store.updateTranscript(id: m.id, transcript: text)
+                    let finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "(Không nhận diện được giọng nói trong đoạn ghi âm này)"
+                        : text
+                    store.updateTranscript(id: m.id, transcript: finalTranscript)
                     loadMeetingData()
                     isProcessing = false
                     statusMessage = "Đã chuyển văn bản thành công!"

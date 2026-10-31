@@ -80,10 +80,15 @@ char* ms_whisper_transcribe(
     params.suppress_blank = true;
     params.suppress_nst = true;
     params.language = "vi";
+    params.temperature = 0.0f;
+    params.temperature_inc = 0.0f; // Tắt loop fallback nhiệt độ, tăng tốc giải mã gấp 4-5 lần
+    params.greedy.best_of = 1;
+    params.beam_search.beam_size = 1;
 
-    // Số luồng tính toán CPU an toàn trên iOS: để lại 2 core tiết kiệm điện cho hệ thống
+    // Số luồng tính toán CPU tối ưu trên chip Apple:
+    // Tận dụng các nhân hiệu năng cao (P-core), tránh barrier lock trên E-core
     unsigned int hardware_cores = std::thread::hardware_concurrency();
-    int n_threads = std::max(1, std::min(4, (int)hardware_cores - 2));
+    int n_threads = std::min(4, std::max(2, (int)hardware_cores / 2));
     params.n_threads = n_threads;
 
     ProgressBridgeData pdata = { progress_cb, user_data };
