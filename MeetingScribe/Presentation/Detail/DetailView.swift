@@ -28,6 +28,9 @@ public struct DetailView: View {
     @State private var progressPercent = 0
     @State private var statusMessage = ""
     @State private var errorMessage: String?
+    // Giữ handle để huỷ job đang chạy + mốc thời gian bắt đầu (hiển thị "đã chạy bao lâu")
+    @State private var processingTask: Task<Void, Never>?
+    @State private var processingStartedAt: Date?
 
     // Xuất file & Edit trước khi xuất
     @State private var showingEditExportSheet = false
@@ -385,10 +388,46 @@ public struct DetailView: View {
                     .font(.caption)
                     .fontWeight(.bold)
             }
+
+            if let startedAt = processingStartedAt {
+                HStack {
+                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                        Label(Self.elapsedText(from: startedAt, to: context.date), systemImage: "clock")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button(role: .destructive, action: cancelProcessing) {
+                        Text("Huỷ")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                }
+            }
         }
         .padding(12)
         .background(Color(.tertiarySystemGroupedBackground))
         .cornerRadius(10)
+    }
+
+    static func elapsedText(from start: Date, to now: Date) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return String(format: "Đã chạy %d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "Đã chạy %d:%02d", minutes, seconds)
+    }
+
+    private func cancelProcessing() {
+        processingTask?.cancel()
+        processingTask = nil
+        processingStartedAt = nil
+        isProcessing = false
+        progressPercent = 0
+        statusMessage = "Đã huỷ."
     }
 
     // MARK: - 4. Bottom Action Bar
@@ -673,8 +712,10 @@ public struct DetailView: View {
 
         isProcessing = true
         progressPercent = 10
+        processingStartedAt = Date()
+        processingTask?.cancel()
 
-        Task {
+        processingTask = Task {
             do {
                 var text = ""
                 if engine == "WHISPER" {
@@ -711,11 +752,24 @@ public struct DetailView: View {
                     store.updateTranscript(id: m.id, transcript: finalTranscript)
                     loadMeetingData()
                     isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
+                    progressPercent = 100
                     statusMessage = "Đã chuyển văn bản thành công!"
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
+                    progressPercent = 0
+                    statusMessage = "Đã huỷ."
                 }
             } catch {
                 await MainActor.run {
                     isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
                     errorMessage = error.localizedDescription
                 }
             }
@@ -728,8 +782,10 @@ public struct DetailView: View {
 
         isProcessing = true
         progressPercent = 15
+        processingStartedAt = Date()
+        processingTask?.cancel()
 
-        Task {
+        processingTask = Task {
             do {
                 var json = ""
                 if provider == "GEMINI" {
@@ -758,12 +814,24 @@ public struct DetailView: View {
                     store.updateSummary(id: m.id, summaryJson: json)
                     loadMeetingData()
                     isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
                     selectedTab = 1
                     statusMessage = "Đã tóm tắt thành công!"
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
+                    progressPercent = 0
+                    statusMessage = "Đã huỷ."
                 }
             } catch {
                 await MainActor.run {
                     isProcessing = false
+                    processingStartedAt = nil
+                    processingTask = nil
                     errorMessage = error.localizedDescription
                 }
             }

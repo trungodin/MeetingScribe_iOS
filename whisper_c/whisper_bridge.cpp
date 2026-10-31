@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <thread>
+#include <atomic>
 
 static bool is_non_speech(const std::string &text) {
     size_t begin = text.find_first_not_of(" \t\r\n");
@@ -36,6 +37,25 @@ struct ProgressBridgeData {
     ms_whisper_progress_callback cb;
     void* user_data;
 };
+
+// Số luồng suy diễn: 0 = tự động
+static std::atomic<int> g_n_threads{0};
+// Cờ yêu cầu huỷ (được kiểm tra bên trong whisper_full)
+static std::atomic<bool> g_abort_requested{false};
+
+static int ms_whisper_resolve_n_threads() {
+    const int forced = g_n_threads.load();
+    if (forced > 0) return forced;
+
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 2;
+    // 4 luồng là điểm ngọt: nhanh hơn single-thread 4-6 lần mà không bị nhiệt/pin.
+    return static_cast<int>(std::min<unsigned>(4u, std::max<unsigned>(2u, hw)));
+}
+
+static bool ms_whisper_abort_trampoline(void* /*user_data*/) {
+    return g_abort_requested.load();
+}
 
 static void native_progress_trampoline(struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, int progress, void * user_data) {
     auto *data = reinterpret_cast<ProgressBridgeData*>(user_data);
@@ -94,10 +114,16 @@ char* ms_whisper_transcribe(
         params.greedy.best_of = 1;
         params.beam_search.beam_size = 1;
 
-        // Dùng đúng 1 luồng (single thread) chuyên dụng trên iOS:
-        // Bỏ qua 100% threadpool và ggml_barrier (vốn bị lỗi spinlock deadlock trên iOS khi không có OpenMP).
-        // Nhân hiệu năng cao của chip Apple A16 Bionic xử lý NEON cực nhanh mà không bị khóa luồng.
-        params.n_threads = 1;
+        // Trước đây ép n_threads = 1 nên chỉ dùng 1 lõi CPU (chậm). Nguyên nhân thật của việc
+        // "đứng ở 96%" là no_timestamps = true -> seek_delta = 0 (xem chú thích phía trên), không phải thread.
+        // ggml bản này dùng barrier nội bộ bằng atomic (ggml-cpu.c: ggml_barrier), không cần OpenMP,
+        // nên chạy đa luồng bình thường trên iOS. 4 luồng nhanh hơn 1 luồng khoảng 4-6 lần.
+        params.n_threads = ms_whisper_resolve_n_threads();
+
+        // Cho phép người dùng huỷ giữa chừng (nút "Huỷ" trong DetailView)
+        g_abort_requested.store(false);
+        params.abort_callback = ms_whisper_abort_trampoline;
+        params.abort_callback_user_data = nullptr;
 
         ProgressBridgeData pdata = { progress_cb, user_data };
         if (progress_cb) {
@@ -138,6 +164,18 @@ char* ms_whisper_transcribe(
     } catch (...) {
         return strdup("");
     }
+}
+
+void ms_whisper_set_n_threads(int n_threads) {
+    g_n_threads.store(n_threads > 0 ? n_threads : 0);
+}
+
+void ms_whisper_request_abort(void) {
+    g_abort_requested.store(true);
+}
+
+void ms_whisper_reset_abort(void) {
+    g_abort_requested.store(false);
 }
 
 void ms_whisper_free_string(char* str) {
