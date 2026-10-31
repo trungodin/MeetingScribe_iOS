@@ -33,6 +33,8 @@ public struct DetailView: View {
     @State private var showingEditExportSheet = false
     @State private var showingShareSheet = false
     @State private var exportedFileURL: URL?
+    @State private var shareAudioURL: URL?
+    @State private var showingAudioShareSheet = false
 
     // Dữ liệu chỉnh sửa trước khi xuất
     @State private var editTitle = ""
@@ -98,6 +100,11 @@ public struct DetailView: View {
                 ShareSheet(items: [url])
             }
         }
+        .sheet(isPresented: $showingAudioShareSheet) {
+            if let url = shareAudioURL {
+                ShareSheet(items: [url])
+            }
+        }
         .sheet(isPresented: $showingEditExportSheet) {
             editExportModalView
         }
@@ -134,6 +141,18 @@ public struct DetailView: View {
                 Text(formatDuration(playbackPosition))
                     .font(.caption)
                     .foregroundColor(.secondary)
+                Spacer()
+
+                // Nút chia sẻ file ghi âm gốc
+                Button(action: shareAudioFile) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Xuất audio")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+
                 Spacer()
                 Text(formatDuration(totalDuration > 0 ? totalDuration : Double(meeting.durationMs) / 1000))
                     .font(.caption)
@@ -577,6 +596,15 @@ public struct DetailView: View {
         audioPlayer = nil
         isPlaying = false
         playbackTimer?.invalidate()
+    }
+
+    private func shareAudioFile() {
+        guard let path = meeting?.audioFilePath, !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
+            errorMessage = "File âm thanh không tồn tại trên thiết bị."
+            return
+        }
+        shareAudioURL = URL(fileURLWithPath: path)
+        showingAudioShareSheet = true
     }
 
     private func formatDuration(_ sec: Double) -> String {
