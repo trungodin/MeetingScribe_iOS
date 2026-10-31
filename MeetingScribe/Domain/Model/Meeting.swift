@@ -66,5 +66,29 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
         formatter.dateFormat = "dd/MM/yyyy HH:mm"
         return formatter.string(from: date)
     }
+
+    /// Trả về đường dẫn hợp lệ trên thiết bị hiện tại (giải quyết việc UUID container của iOS thay đổi sau mỗi lần build/update app)
+    public var resolvedAudioURL: URL? {
+        guard !audioFilePath.isEmpty else { return nil }
+        let currentUrl = URL(fileURLWithPath: audioFilePath)
+        if FileManager.default.fileExists(atPath: currentUrl.path) {
+            return currentUrl
+        }
+
+        // Nếu container UUID thay đổi, tìm file trong thư mục Documents/recordings hiện tại
+        let fileName = currentUrl.lastPathComponent
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let inRecordings = docs[0].appendingPathComponent("recordings").appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: inRecordings.path) {
+            return inRecordings
+        }
+
+        let inDocs = docs[0].appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: inDocs.path) {
+            return inDocs
+        }
+
+        return nil
+    }
 }
 

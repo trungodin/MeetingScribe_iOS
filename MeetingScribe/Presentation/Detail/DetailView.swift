@@ -126,8 +126,8 @@ public struct DetailView: View {
 
     private func loadMeetingData() {
         meeting = store.getMeeting(id: meetingId)
-        if let path = meeting?.audioFilePath, FileManager.default.fileExists(atPath: path) {
-            if let player = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: path)) {
+        if let audioURL = meeting?.resolvedAudioURL {
+            if let player = try? AVAudioPlayer(contentsOf: audioURL) {
                 totalDuration = player.duration
             }
         }
@@ -548,8 +548,8 @@ public struct DetailView: View {
     // MARK: - Audio Logic
 
     private func togglePlayAudio() {
-        guard let path = meeting?.audioFilePath, FileManager.default.fileExists(atPath: path) else {
-            errorMessage = "File âm thanh không tồn tại"
+        guard let audioURL = meeting?.resolvedAudioURL else {
+            errorMessage = "File âm thanh không tồn tại trên thiết bị"
             return
         }
 
@@ -560,7 +560,7 @@ public struct DetailView: View {
         } else {
             if audioPlayer == nil {
                 do {
-                    audioPlayer = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                    audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
                     totalDuration = audioPlayer?.duration ?? 0
                 } catch {
                     errorMessage = "Không thể phát audio: \(error.localizedDescription)"
@@ -599,11 +599,11 @@ public struct DetailView: View {
     }
 
     private func shareAudioFile() {
-        guard let path = meeting?.audioFilePath, !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
+        guard let audioURL = meeting?.resolvedAudioURL else {
             errorMessage = "File âm thanh không tồn tại trên thiết bị."
             return
         }
-        shareAudioURL = URL(fileURLWithPath: path)
+        shareAudioURL = audioURL
         showingAudioShareSheet = true
     }
 
@@ -618,6 +618,10 @@ public struct DetailView: View {
 
     private func startTranscribe() {
         guard let m = meeting else { return }
+        guard let audioURL = m.resolvedAudioURL else {
+            errorMessage = "File âm thanh không tồn tại trên thiết bị."
+            return
+        }
         let engine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
 
         isProcessing = true
@@ -629,14 +633,14 @@ public struct DetailView: View {
                 if engine == "WHISPER" {
                     statusMessage = "Đang nhận dạng bằng Whisper Offline (trên máy)..."
                     text = try await WhisperEngine.shared.transcribe(
-                        audioFileURL: URL(fileURLWithPath: m.audioFilePath)
+                        audioFileURL: audioURL
                     ) { p in DispatchQueue.main.async { progressPercent = p } }
                 } else if engine == "GEMINI" {
                     let key = KeychainManager.shared.get(key: .geminiApiKey)
                     let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
                     statusMessage = "Đang chuyển văn bản qua Google Gemini Flash..."
                     text = try await GeminiService.shared.transcribe(
-                        audioFileURL: URL(fileURLWithPath: m.audioFilePath),
+                        audioFileURL: audioURL,
                         apiKey: key,
                         proxyUrl: proxy
                     ) { p in DispatchQueue.main.async { progressPercent = p } }
@@ -648,7 +652,7 @@ public struct DetailView: View {
                     }
                     statusMessage = "Đang nhận dạng qua Groq Whisper large-v3-turbo..."
                     text = try await GroqAsrService.shared.transcribe(
-                        audioFileURL: URL(fileURLWithPath: m.audioFilePath),
+                        audioFileURL: audioURL,
                         apiKey: key
                     ) { p in DispatchQueue.main.async { progressPercent = p } }
                 }
