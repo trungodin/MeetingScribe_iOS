@@ -85,11 +85,10 @@ char* ms_whisper_transcribe(
     params.greedy.best_of = 1;
     params.beam_search.beam_size = 1;
 
-    // Số luồng tính toán CPU tối ưu trên chip Apple:
-    // Tận dụng các nhân hiệu năng cao (P-core), tránh barrier lock trên E-core
-    unsigned int hardware_cores = std::thread::hardware_concurrency();
-    int n_threads = std::min(4, std::max(2, (int)hardware_cores / 2));
-    params.n_threads = n_threads;
+    // Dùng đúng 1 luồng (single thread) chuyên dụng trên iOS:
+    // Bỏ qua 100% threadpool và ggml_barrier (vốn bị lỗi spinlock deadlock trên iOS khi không có OpenMP).
+    // Nhân hiệu năng cao của chip Apple A16 Bionic xử lý NEON cực nhanh mà không bị khóa luồng.
+    params.n_threads = 1;
 
     ProgressBridgeData pdata = { progress_cb, user_data };
     if (progress_cb) {
