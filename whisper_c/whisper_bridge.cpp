@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <thread>
 
 static bool is_non_speech(const std::string &text) {
     size_t begin = text.find_first_not_of(" \t\r\n");
@@ -31,6 +32,18 @@ static bool is_non_speech(const std::string &text) {
     return false;
 }
 
+struct ProgressBridgeData {
+    ms_whisper_progress_callback cb;
+    void* user_data;
+};
+
+static void native_progress_trampoline(struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, int progress, void * user_data) {
+    auto *data = reinterpret_cast<ProgressBridgeData*>(user_data);
+    if (data && data->cb) {
+        data->cb(progress, data->user_data);
+    }
+}
+
 extern "C" {
 
 void* ms_whisper_init(const char* model_path) {
@@ -43,7 +56,13 @@ void* ms_whisper_init(const char* model_path) {
     return reinterpret_cast<void*>(ctx);
 }
 
-char* ms_whisper_transcribe(void* ctx_ptr, const float* samples, int n_samples) {
+char* ms_whisper_transcribe(
+    void* ctx_ptr,
+    const float* samples,
+    int n_samples,
+    ms_whisper_progress_callback progress_cb,
+    void* user_data
+) {
     if (!ctx_ptr || !samples || n_samples <= 0) {
         return strdup("");
     }
@@ -61,7 +80,17 @@ char* ms_whisper_transcribe(void* ctx_ptr, const float* samples, int n_samples) 
     params.suppress_blank = true;
     params.suppress_nst = true;
     params.language = "vi";
-    params.n_threads = 4;
+
+    // Số luồng tính toán CPU an toàn trên iOS: để lại 2 core tiết kiệm điện cho hệ thống
+    unsigned int hardware_cores = std::thread::hardware_concurrency();
+    int n_threads = std::max(1, std::min(4, (int)hardware_cores - 2));
+    params.n_threads = n_threads;
+
+    ProgressBridgeData pdata = { progress_cb, user_data };
+    if (progress_cb) {
+        params.progress_callback = native_progress_trampoline;
+        params.progress_callback_user_data = &pdata;
+    }
 
     int result = whisper_full(ctx, params, samples, n_samples);
     if (result != 0) {
@@ -109,4 +138,3 @@ void ms_whisper_free(void* ctx_ptr) {
 }
 
 } // extern "C"
-

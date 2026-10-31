@@ -120,14 +120,27 @@ public class WhisperEngine {
                     ms_whisper_free(ctx)
                 }
 
-                onProgress?(60)
+                // Callback truyền tiến độ nhận diện thực tế từ whisper_full
+                class ProgressHolder {
+                    let onProgress: ((Int) -> Void)?
+                    init(_ cb: ((Int) -> Void)?) { self.onProgress = cb }
+                }
+                let holder = ProgressHolder(onProgress)
+                let unmanaged = Unmanaged.passUnretained(holder)
+                let userPtr = unmanaged.toOpaque()
+
+                let callback: ms_whisper_progress_callback = { nativeProg, userData in
+                    guard let userData = userData else { return }
+                    let h = Unmanaged<ProgressHolder>.fromOpaque(userData).takeUnretainedValue()
+                    // Map tiến trình whisper từ 0..100 vào dải 50..98% của thanh tiến độ
+                    let uiPercent = 50 + Int(Double(nativeProg) * 0.48)
+                    h.onProgress?(min(uiPercent, 98))
+                }
 
                 let textPtr = samples.withUnsafeBufferPointer { ptr -> UnsafeMutablePointer<CChar>? in
                     guard let baseAddr = ptr.baseAddress else { return nil }
-                    return ms_whisper_transcribe(ctx, baseAddr, Int32(samples.count))
+                    return ms_whisper_transcribe(ctx, baseAddr, Int32(samples.count), callback, userPtr)
                 }
-
-                onProgress?(90)
 
                 guard let textPtr = textPtr else {
                     continuation.resume(returning: "")

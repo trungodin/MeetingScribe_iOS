@@ -5,13 +5,21 @@
 extern "C" {
 #endif
 
+typedef void (*ms_whisper_progress_callback)(int progress, void* user_data);
+
 // Khởi tạo model từ đường dẫn file GGML (.bin)
 // Trả về con trỏ (opaque pointer) tới whisper_context, hoặc NULL nếu thất bại
 void* ms_whisper_init(const char* model_path);
 
 // Nhận dạng giọng nói tiếng Việt từ mảng mẫu âm thanh 16kHz mono (float [-1.0, 1.0])
 // Trả về con trỏ chuỗi UTF-8 (cần giải phóng bằng ms_whisper_free_string)
-char* ms_whisper_transcribe(void* ctx, const float* samples, int n_samples);
+char* ms_whisper_transcribe(
+    void* ctx,
+    const float* samples,
+    int n_samples,
+    ms_whisper_progress_callback progress_cb,
+    void* user_data
+);
 
 // Giải phóng chuỗi đã cấp phát
 void ms_whisper_free_string(char* str);
@@ -24,4 +32,3 @@ void ms_whisper_free(void* ctx);
 #endif
 
 #endif // WHISPER_BRIDGE_H
-
