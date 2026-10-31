@@ -44,7 +44,9 @@ public class WhisperEngine {
 
         // Thực thi nhận diện giọng nói bằng whisper.cpp native engine
         let resultText = try await runWhisperInference(samples: samples, modelPath: modelURL.path, onProgress: onProgress)
-        onProgress?(100)
+        await MainActor.run {
+            onProgress?(100)
+        }
         return resultText
     }
 
@@ -152,6 +154,9 @@ public class WhisperEngine {
                 }
 
                 let transcript = String(cString: textPtr).trimmingCharacters(in: .whitespacesAndNewlines)
+                DispatchQueue.main.async {
+                    onProgress?(98)
+                }
                 continuation.resume(returning: transcript)
             }
         }

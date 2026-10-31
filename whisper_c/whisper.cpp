@@ -7947,6 +7947,12 @@ int whisper_full_with_state(
                 seek_delta = std::min(seek_end - seek, WHISPER_CHUNK_SIZE * 100);
             }
 
+            // Phòng thủ triệt để: Đảm bảo seek_delta luôn dương để seek luôn tiến về phía trước,
+            // ngăn chặn 100% vòng lặp vô tận khiến tiến trình bị treo vĩnh viễn ở 96%.
+            if (seek_delta <= 0) {
+                seek_delta = std::min(seek_end - seek, WHISPER_CHUNK_SIZE * 100);
+            }
+
             // update audio window
             seek += seek_delta;
 

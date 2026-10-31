@@ -49,11 +49,15 @@ extern "C" {
 void* ms_whisper_init(const char* model_path) {
     if (!model_path) return nullptr;
 
-    struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false; // CPU NEON inference on Apple Silicon
+    try {
+        struct whisper_context_params cparams = whisper_context_default_params();
+        cparams.use_gpu = false; // CPU NEON inference on Apple Silicon
 
-    struct whisper_context *ctx = whisper_init_from_file_with_params(model_path, cparams);
-    return reinterpret_cast<void*>(ctx);
+        struct whisper_context *ctx = whisper_init_from_file_with_params(model_path, cparams);
+        return reinterpret_cast<void*>(ctx);
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 char* ms_whisper_transcribe(
@@ -67,65 +71,73 @@ char* ms_whisper_transcribe(
         return strdup("");
     }
 
-    auto *ctx = reinterpret_cast<struct whisper_context *>(ctx_ptr);
+    try {
+        auto *ctx = reinterpret_cast<struct whisper_context *>(ctx_ptr);
 
-    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = false;
-    params.print_progress = false;
-    params.print_special = false;
-    params.print_timestamps = false;
-    params.no_timestamps = true;
-    params.no_context = true;
-    params.translate = false;
-    params.suppress_blank = true;
-    params.suppress_nst = true;
-    params.language = "vi";
-    params.temperature = 0.0f;
-    params.temperature_inc = 0.0f; // Tắt loop fallback nhiệt độ, tăng tốc giải mã gấp 4-5 lần
-    params.greedy.best_of = 1;
-    params.beam_search.beam_size = 1;
+        whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        params.print_realtime = false;
+        params.print_progress = false;
+        params.print_special = false;
+        params.print_timestamps = false;
+        // QUAN TRỌNG: params.no_timestamps PHẢI là false!
+        // Whisper cần sinh các token timestamp để xác định seek_delta và trượt sliding window (30s) tiến tới.
+        // Nếu để true, seek_delta = 0 khiến whisper_cpp rơi vào vòng lặp vô tận (seek += 0) gây đứng ở 96%.
+        // Hàm whisper_full_get_segment_text() đã chỉ trả về văn bản sạch, không kèm timestamp text.
+        params.no_timestamps = false;
+        params.no_context = true;
+        params.translate = false;
+        params.suppress_blank = true;
+        params.suppress_nst = true;
+        params.language = "vi";
+        params.temperature = 0.0f;
+        params.temperature_inc = 0.0f; // Tắt loop fallback nhiệt độ, tăng tốc giải mã gấp 4-5 lần
+        params.greedy.best_of = 1;
+        params.beam_search.beam_size = 1;
 
-    // Dùng đúng 1 luồng (single thread) chuyên dụng trên iOS:
-    // Bỏ qua 100% threadpool và ggml_barrier (vốn bị lỗi spinlock deadlock trên iOS khi không có OpenMP).
-    // Nhân hiệu năng cao của chip Apple A16 Bionic xử lý NEON cực nhanh mà không bị khóa luồng.
-    params.n_threads = 1;
+        // Dùng đúng 1 luồng (single thread) chuyên dụng trên iOS:
+        // Bỏ qua 100% threadpool và ggml_barrier (vốn bị lỗi spinlock deadlock trên iOS khi không có OpenMP).
+        // Nhân hiệu năng cao của chip Apple A16 Bionic xử lý NEON cực nhanh mà không bị khóa luồng.
+        params.n_threads = 1;
 
-    ProgressBridgeData pdata = { progress_cb, user_data };
-    if (progress_cb) {
-        params.progress_callback = native_progress_trampoline;
-        params.progress_callback_user_data = &pdata;
-    }
+        ProgressBridgeData pdata = { progress_cb, user_data };
+        if (progress_cb) {
+            params.progress_callback = native_progress_trampoline;
+            params.progress_callback_user_data = &pdata;
+        }
 
-    int result = whisper_full(ctx, params, samples, n_samples);
-    if (result != 0) {
+        int result = whisper_full(ctx, params, samples, n_samples);
+        if (result != 0) {
+            return strdup("");
+        }
+
+        std::ostringstream full_transcript;
+        const int n_segments = whisper_full_n_segments(ctx);
+        int kept_segments = 0;
+
+        for (int i = 0; i < n_segments; ++i) {
+            const char *raw = whisper_full_get_segment_text(ctx, i);
+            if (!raw) continue;
+
+            std::string text(raw);
+            if (is_non_speech(text)) continue;
+
+            size_t begin = text.find_first_not_of(" \t\r\n");
+            if (begin == std::string::npos) continue;
+
+            if (kept_segments > 0) full_transcript << "\n";
+            full_transcript << text.substr(begin);
+            ++kept_segments;
+        }
+
+        std::string str_res = full_transcript.str();
+        char* c_res = (char*)malloc(str_res.size() + 1);
+        if (c_res) {
+            std::memcpy(c_res, str_res.c_str(), str_res.size() + 1);
+        }
+        return c_res;
+    } catch (...) {
         return strdup("");
     }
-
-    std::ostringstream full_transcript;
-    const int n_segments = whisper_full_n_segments(ctx);
-    int kept_segments = 0;
-
-    for (int i = 0; i < n_segments; ++i) {
-        const char *raw = whisper_full_get_segment_text(ctx, i);
-        if (!raw) continue;
-
-        std::string text(raw);
-        if (is_non_speech(text)) continue;
-
-        size_t begin = text.find_first_not_of(" \t\r\n");
-        if (begin == std::string::npos) continue;
-
-        if (kept_segments > 0) full_transcript << "\n";
-        full_transcript << text.substr(begin);
-        ++kept_segments;
-    }
-
-    std::string str_res = full_transcript.str();
-    char* c_res = (char*)malloc(str_res.size() + 1);
-    if (c_res) {
-        std::memcpy(c_res, str_res.c_str(), str_res.size() + 1);
-    }
-    return c_res;
 }
 
 void ms_whisper_free_string(char* str) {
