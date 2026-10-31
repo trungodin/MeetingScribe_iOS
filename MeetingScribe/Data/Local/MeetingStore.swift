@@ -99,3 +99,4 @@ public class MeetingStore: ObservableObject {
         return meetings.first { $0.id == id }
     }
 }
+

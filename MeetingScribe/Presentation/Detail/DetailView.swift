@@ -2,7 +2,8 @@
 //  DetailView.swift
 //  MeetingScribe
 //
-//  Màn hình Chi tiết cuộc họp: Phát lại audio, chuyển văn bản, tóm tắt AI, xuất Word
+//  Màn hình Chi tiết cuộc họp: Phát lại audio (Seekbar + Tua 5s), Tab Transcript / Summary,
+//  Hộp thoại xem trước & chỉnh sửa trước khi xuất Word NĐ 30, Chia sẻ file.
 //
 
 import SwiftUI
@@ -13,60 +14,78 @@ public struct DetailView: View {
 
     @StateObject private var store = MeetingStore.shared
     @State private var meeting: Meeting?
+    @State private var selectedTab = 0 // 0: Transcript, 1: Tóm tắt biên bản
+
+    // Audio Player
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
-    @State private var playbackProgress: Double = 0
+    @State private var playbackPosition: Double = 0
+    @State private var totalDuration: Double = 0
     @State private var playbackTimer: Timer?
 
-    // Trạng thái AI
+    // Tiến trình AI
     @State private var isProcessing = false
     @State private var progressPercent = 0
     @State private var statusMessage = ""
     @State private var errorMessage: String?
+
+    // Xuất file & Edit trước khi xuất
+    @State private var showingEditExportSheet = false
     @State private var showingShareSheet = false
     @State private var exportedFileURL: URL?
+
+    // Dữ liệu chỉnh sửa trước khi xuất
+    @State private var editTitle = ""
+    @State private var editOrg = ""
+    @State private var editChair = ""
+    @State private var editSecretary = ""
+    @State private var editTime = ""
+    @State private var editLocation = ""
+    @State private var editConclusions = ""
 
     public init(meetingId: Int64) {
         self.meetingId = meetingId
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if let meeting = meeting {
-                    // 1. Thẻ thông tin cuộc họp & Audio Player
-                    audioPlayerCard(meeting: meeting)
+        VStack(spacing: 0) {
+            if let m = meeting {
+                // 1. Trình phát Audio (Audio Player Card đầy đủ Seekbar + Tua 5s)
+                audioPlayerCard(meeting: m)
 
-                    // 2. Cụm nút hành động AI
-                    aiActionButtons(meeting: meeting)
-
-                    // 3. Tiến trình xử lý (nếu có)
-                    if isProcessing {
-                        processingCard
-                    }
-
-                    // 4. Kết quả Tóm tắt (Biên bản)
-                    if let summary = meeting.parsedSummary {
-                        summaryCard(summary: summary)
-                    }
-
-                    // 5. Nội dung transcript gốc
-                    if !meeting.transcript.isEmpty {
-                        transcriptCard(transcript: meeting.transcript)
-                    }
-                } else {
-                    ProgressView()
+                // 2. Thanh chuyển Tab (Văn bản / Tóm tắt)
+                Picker("", selection: $selectedTab) {
+                    Text("Văn bản gốc").tag(0)
+                    Text("Tóm tắt AI").tag(1)
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+
+                // 3. Nội dung Tab
+                TabView(selection: $selectedTab) {
+                    transcriptTabView(meeting: m)
+                        .tag(0)
+
+                    summaryTabView(meeting: m)
+                        .tag(1)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                // 4. Thanh nút hành động phía dưới (Xuất Word, Chia sẻ)
+                bottomActionBar(meeting: m)
+            } else {
+                ProgressView()
+                    .frame(maxHeight: .infinity)
             }
-            .padding()
         }
-        .navigationTitle(meeting?.title ?? "Chi tiết")
+        .navigationTitle(meeting?.title ?? "Chi tiết cuộc họp")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let exportPath = meeting?.exportFilePath, !exportPath.isEmpty {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if let path = meeting?.exportFilePath, !path.isEmpty {
                     Button(action: {
-                        exportedFileURL = URL(fileURLWithPath: exportPath)
+                        exportedFileURL = URL(fileURLWithPath: path)
                         showingShareSheet = true
                     }) {
                         Image(systemName: "square.and.arrow.up")
@@ -78,6 +97,9 @@ public struct DetailView: View {
             if let url = exportedFileURL {
                 ShareSheet(items: [url])
             }
+        }
+        .sheet(isPresented: $showingEditExportSheet) {
+            editExportModalView
         }
         .alert("Thông báo", isPresented: Binding(
             get: { errorMessage != nil },
@@ -97,80 +119,244 @@ public struct DetailView: View {
 
     private func loadMeetingData() {
         meeting = store.getMeeting(id: meetingId)
+        if let path = meeting?.audioFilePath, FileManager.default.fileExists(atPath: path) {
+            if let player = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: path)) {
+                totalDuration = player.duration
+            }
+        }
     }
 
-    // MARK: - View Components
+    // MARK: - 1. Audio Player Card (Seekbar + Tua lùi / tới 5s)
 
     private func audioPlayerCard(meeting: Meeting) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 8) {
             HStack {
-                Text(meeting.title)
-                    .font(.headline)
-                Spacer()
-                Text(meeting.formattedDuration)
-                    .font(.subheadline)
+                Text(formatDuration(playbackPosition))
+                    .font(.caption)
                     .foregroundColor(.secondary)
-            }
-
-            Slider(value: $playbackProgress, in: 0...1) { editing in
-                if !editing, let player = audioPlayer {
-                    player.currentTime = playbackProgress * player.duration
-                }
-            }
-
-            HStack {
-                Button(action: togglePlayAudio) {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(.blue)
-                }
-
                 Spacer()
-
-                Text(meeting.formattedCreatedAt)
+                Text(formatDuration(totalDuration > 0 ? totalDuration : Double(meeting.durationMs) / 1000))
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            // Thanh tua thời gian Seekbar
+            Slider(value: Binding(
+                get: { playbackPosition },
+                set: { newVal in
+                    playbackPosition = newVal
+                    audioPlayer?.currentTime = newVal
+                }
+            ), in: 0...max(1, totalDuration > 0 ? totalDuration : 1))
+
+            HStack(spacing: 32) {
+                // Tua lùi 5s
+                Button(action: { seekBy(-5) }) {
+                    Image(systemName: "gobackward.5")
+                        .font(.title2)
+                        .foregroundColor(.primary)
+                }
+
+                // Phát / Dừng
+                Button(action: togglePlayAudio) {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.blue)
+                }
+
+                // Tua tới 5s
+                Button(action: { seekBy(5) }) {
+                    Image(systemName: "goforward.5")
+                        .font(.title2)
+                        .foregroundColor(.primary)
+                }
+            }
         }
-        .padding()
+        .padding(14)
         .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(12)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
-    private func aiActionButtons(meeting: Meeting) -> some View {
-        VStack(spacing: 12) {
-            // Nút Chuyển văn bản
-            Button(action: startTranscribe) {
-                HStack {
-                    Image(systemName: "waveform")
-                    Text(meeting.transcript.isEmpty ? "Chuyển thành văn bản (Groq ASR)" : "Chuyển văn bản lại")
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
-            }
-            .disabled(isProcessing)
+    // MARK: - 2. Tab Transcript
 
-            // Nút Tóm tắt AI
-            Button(action: startSummarize) {
-                HStack {
-                    Image(systemName: "doc.text.magnifyingglass")
-                    Text("Tóm tắt biên bản (DeepSeek AI)")
+    private func transcriptTabView(meeting: Meeting) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if isProcessing {
+                    processingCard
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.purple)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+
+                if meeting.transcript.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "waveform.badge.magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("Chưa chuyển văn bản")
+                            .font(.headline)
+                        Text("Bấm nút bên dưới để chuyển giọng nói thành văn bản tiếng Việt.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        Button(action: startTranscribe) {
+                            HStack {
+                                Image(systemName: "record.circle")
+                                Text("Chuyển văn bản")
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                } else {
+                    HStack {
+                        Text("NỘI DUNG VĂN BẢN")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Chuyển lại", action: startTranscribe)
+                            .font(.caption)
+                    }
+
+                    Text(meeting.transcript)
+                        .font(.body)
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+                }
             }
-            .disabled(isProcessing || meeting.transcript.isEmpty)
+            .padding(16)
         }
+    }
+
+    // MARK: - 3. Tab Summary
+
+    private func summaryTabView(meeting: Meeting) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if isProcessing {
+                    processingCard
+                }
+
+                if let summary = meeting.parsedSummary {
+                    summaryContentView(summary: summary)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("Chưa có tóm tắt biên bản")
+                            .font(.headline)
+                        Text("Tự động bóc tách thành phần, nội dung chính, kết luận theo thể thức Nghị định 30/2020/NĐ-CP.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        Button(action: startSummarize) {
+                            HStack {
+                                Image(systemName: "sparkles")
+                                Text("Tóm tắt bằng AI")
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(meeting.transcript.isEmpty ? Color.gray : Color.purple)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+                        .disabled(meeting.transcript.isEmpty || isProcessing)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func summaryContentView(summary: MeetingSummary) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Group {
+                summaryRow(title: "Cuộc họp:", value: summary.tenCuocHop)
+                summaryRow(title: "Thời gian:", value: summary.thoiGian)
+                summaryRow(title: "Địa điểm:", value: summary.diaDiem)
+                summaryRow(title: "Chủ trì:", value: summary.chuTri)
+                summaryRow(title: "Thư ký:", value: summary.thuKy)
+                if !summary.thanhPhan.isEmpty {
+                    summaryRow(title: "Thành phần:", value: summary.thanhPhan.joined(separator: ", "))
+                }
+            }
+
+            Divider()
+
+            if !summary.noiDungChinh.isEmpty {
+                Text("I. NỘI DUNG CHÍNH")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+
+                ForEach(Array(summary.noiDungChinh.enumerated()), id: \.offset) { idx, item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(idx + 1). \(item.tieuDe)")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.blue)
+                        Text(item.noiDung)
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .cornerRadius(8)
+                }
+            }
+
+            if !summary.ketLuan.isEmpty {
+                Text("II. KẾT LUẬN & CHỈ ĐẠO")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+
+                ForEach(Array(summary.ketLuan.enumerated()), id: \.offset) { idx, item in
+                    Text("- \(item)")
+                        .font(.body)
+                }
+            }
+
+            if !summary.deXuat.isEmpty {
+                Text("III. ĐỀ XUẤT, KIẾN NGHỊ")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+
+                ForEach(Array(summary.deXuat.enumerated()), id: \.offset) { idx, item in
+                    Text("• \(item)")
+                        .font(.body)
+                }
+            }
+        }
+    }
+
+    private func summaryRow(title: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(title)
+                .fontWeight(.bold)
+                .frame(width: 95, alignment: .leading)
+            Text(value.isEmpty ? "Không xác định" : value)
+                .foregroundColor(.primary)
+            Spacer()
+        }
+        .font(.subheadline)
     }
 
     private var processingCard: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             ProgressView(value: Double(progressPercent), total: 100)
             HStack {
                 Text(statusMessage)
@@ -182,77 +368,165 @@ public struct DetailView: View {
                     .fontWeight(.bold)
             }
         }
-        .padding()
+        .padding(12)
         .background(Color(.tertiarySystemGroupedBackground))
         .cornerRadius(10)
     }
 
-    private func summaryCard(summary: MeetingSummary) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("BIÊN BẢN CUỘC HỌP")
-                .font(.headline)
-                .foregroundColor(.purple)
+    // MARK: - 4. Bottom Action Bar
 
-            Divider()
-
-            Group {
-                summaryRow(title: "Chủ trì:", value: summary.chuTri)
-                summaryRow(title: "Thư ký:", value: summary.thuKy)
-                summaryRow(title: "Thời gian:", value: summary.thoiGian)
-                summaryRow(title: "Địa điểm:", value: summary.diaDiem)
+    private func bottomActionBar(meeting: Meeting) -> some View {
+        HStack(spacing: 12) {
+            // Nút Xuất Word NĐ30
+            Button(action: openEditExportModal) {
+                HStack {
+                    Image(systemName: "doc.fill")
+                    Text("Xuất Word NĐ30")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(meeting.summaryJson.isEmpty ? Color.gray : Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(12)
             }
+            .disabled(meeting.summaryJson.isEmpty || isProcessing)
 
-            if !summary.ketLuan.isEmpty {
-                Text("Kết luận & Chỉ đạo:")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                ForEach(summary.ketLuan, id: \.self) { item in
-                    Text("• \(item)")
-                        .font(.body)
+            // Nút Chia sẻ
+            Button(action: {
+                if let path = meeting.exportFilePath, !path.isEmpty {
+                    exportedFileURL = URL(fileURLWithPath: path)
+                    showingShareSheet = true
+                }
+            }) {
+                HStack {
+                    Image(systemName: "square.and.arrow.up")
+                    Text("Chia sẻ")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(meeting.exportFilePath.isEmpty ? Color.gray.opacity(0.4) : Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .disabled(meeting.exportFilePath.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground))
+        .shadow(color: Color.black.opacity(0.05), radius: 5, y: -2)
+    }
+
+    // MARK: - 5. Modal Xem trước & Chỉnh sửa trước khi Xuất Word NĐ 30
+
+    private func openEditExportModal() {
+        guard let summary = meeting?.parsedSummary else {
+            errorMessage = "Vui lòng bấm Tóm tắt bằng AI trước khi xuất Word."
+            return
+        }
+
+        editTitle = summary.tenCuocHop.isEmpty ? (meeting?.title ?? "") : summary.tenCuocHop
+        editOrg = KeychainManager.shared.get(key: .defaultOrg, defaultValue: "ỦY BAN NHÂN DÂN")
+        editChair = summary.chuTri.isEmpty ? KeychainManager.shared.get(key: .defaultChair) : summary.chuTri
+        editSecretary = summary.thuKy.isEmpty ? KeychainManager.shared.get(key: .defaultSecretary) : summary.thuKy
+        editTime = summary.thoiGian
+        editLocation = summary.diaDiem
+        editConclusions = summary.ketLuan.joined(separator: "\n")
+
+        showingEditExportSheet = true
+    }
+
+    private var editExportModalView: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Thông tin cơ quan & Thể thức")) {
+                    TextField("Cơ quan ban hành (in hoa)", text: $editOrg)
+                    TextField("Tên cuộc họp", text: $editTitle)
+                }
+
+                Section(header: Text("Thời gian & Địa điểm")) {
+                    TextField("Thời gian họp", text: $editTime)
+                    TextField("Địa điểm họp", text: $editLocation)
+                }
+
+                Section(header: Text("Người ký biên bản")) {
+                    TextField("Chủ trì cuộc họp", text: $editChair)
+                    TextField("Thư ký ghi biên bản", text: $editSecretary)
+                }
+
+                Section(header: Text("Kết luận & Chỉ đạo (mỗi dòng 1 ý)")) {
+                    TextEditor(text: $editConclusions)
+                        .frame(minHeight: 100)
                 }
             }
-
-            if !summary.deXuat.isEmpty {
-                Text("Đề xuất & Kiến nghị:")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                ForEach(summary.deXuat, id: \.self) { item in
-                    Text("• \(item)")
-                        .font(.body)
+            .navigationTitle("Thông tin biên bản NĐ 30")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Hủy") { showingEditExportSheet = false }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Tạo file Word") {
+                        saveAndExportWord()
+                    }
+                    .fontWeight(.bold)
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(12)
     }
 
-    private func summaryRow(title: String, value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(title)
-                .fontWeight(.medium)
-                .frame(width: 90, alignment: .leading)
-            Text(value.isEmpty ? "Không xác định" : value)
-                .foregroundColor(.primary)
-            Spacer()
+    private func saveAndExportWord() {
+        showingEditExportSheet = false
+        guard let m = meeting, let summary = m.parsedSummary else { return }
+
+        isProcessing = true
+        statusMessage = "Đang tạo file Word (.docx) chuẩn Nghị định 30..."
+        progressPercent = 40
+
+        let conclusionsList = editConclusions.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "^[-•*]\\s*", with: "", options: .regularExpression) }
+            .filter { !$0.isEmpty }
+
+        let updatedSummary = MeetingSummary(
+            tenCuocHop: editTitle,
+            thoiGian: editTime,
+            diaDiem: editLocation,
+            chuTri: editChair,
+            thuKy: editSecretary,
+            thanhPhan: summary.thanhPhan,
+            noiDungChinh: summary.noiDungChinh,
+            ketLuan: conclusionsList.isEmpty ? summary.ketLuan : conclusionsList,
+            deXuat: summary.deXuat
+        )
+
+        Task {
+            do {
+                let docxURL = try DocxExporter.shared.exportToWord(
+                    summary: updatedSummary,
+                    organizationName: editOrg,
+                    customConclusions: conclusionsList
+                )
+
+                await MainActor.run {
+                    var updatedMeeting = m
+                    updatedMeeting.exportFilePath = docxURL.path
+                    updatedMeeting.status = .exported
+                    _ = store.insert(meeting: updatedMeeting)
+                    loadMeetingData()
+
+                    isProcessing = false
+                    exportedFileURL = docxURL
+                    showingShareSheet = true
+                }
+            } catch {
+                await MainActor.run {
+                    isProcessing = false
+                    errorMessage = "Lỗi xuất file Word: \(error.localizedDescription)"
+                }
+            }
         }
-        .font(.subheadline)
     }
 
-    private func transcriptCard(transcript: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Văn bản cuộc họp (Transcript)")
-                .font(.headline)
-            Text(transcript)
-                .font(.body)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(12)
-    }
-
-    // MARK: - Audio Actions
+    // MARK: - Audio Logic
 
     private func togglePlayAudio() {
         guard let path = meeting?.audioFilePath, FileManager.default.fileExists(atPath: path) else {
@@ -268,6 +542,7 @@ public struct DetailView: View {
             if audioPlayer == nil {
                 do {
                     audioPlayer = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                    totalDuration = audioPlayer?.duration ?? 0
                 } catch {
                     errorMessage = "Không thể phát audio: \(error.localizedDescription)"
                     return
@@ -277,17 +552,24 @@ public struct DetailView: View {
             audioPlayer?.play()
             isPlaying = true
 
-            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                 guard let player = audioPlayer else { return }
                 if player.isPlaying {
-                    playbackProgress = player.currentTime / player.duration
+                    playbackPosition = player.currentTime
                 } else {
                     isPlaying = false
-                    playbackProgress = 0
+                    playbackPosition = 0
                     playbackTimer?.invalidate()
                 }
             }
         }
+    }
+
+    private func seekBy(_ seconds: Double) {
+        guard let player = audioPlayer else { return }
+        let target = max(0, min(player.duration, player.currentTime + seconds))
+        player.currentTime = target
+        playbackPosition = target
     }
 
     private func stopAudio() {
@@ -297,36 +579,52 @@ public struct DetailView: View {
         playbackTimer?.invalidate()
     }
 
-    // MARK: - AI Actions
+    private func formatDuration(_ sec: Double) -> String {
+        let total = Int(sec)
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%02d:%02d", m, s)
+    }
+
+    // MARK: - AI Execution
 
     private func startTranscribe() {
         guard let m = meeting else { return }
-        let groqKey = KeychainManager.shared.get(key: .groqApiKey)
-        guard !groqKey.isEmpty else {
-            errorMessage = "Vui lòng vào Cài đặt để nhập Groq API Key (gsk_...)"
-            return
-        }
+        let engine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
 
         isProcessing = true
-        progressPercent = 5
-        statusMessage = "Đang gửi file âm thanh lên Groq Whisper..."
+        progressPercent = 10
 
         Task {
             do {
-                let text = try await GroqAsrService.shared.transcribe(
-                    audioFileURL: URL(fileURLWithPath: m.audioFilePath),
-                    apiKey: groqKey
-                ) { p in
-                    DispatchQueue.main.async {
-                        progressPercent = p
+                var text = ""
+                if engine == "GEMINI" {
+                    let key = KeychainManager.shared.get(key: .geminiApiKey)
+                    let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
+                    statusMessage = "Đang chuyển văn bản qua Google Gemini Flash..."
+                    text = try await GeminiService.shared.transcribe(
+                        audioFileURL: URL(fileURLWithPath: m.audioFilePath),
+                        apiKey: key,
+                        proxyUrl: proxy
+                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                } else {
+                    // Groq Whisper
+                    let key = KeychainManager.shared.get(key: .groqApiKey)
+                    guard !key.isEmpty else {
+                        throw NSError(domain: "Settings", code: 401, userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Groq API Key trong Cài đặt."])
                     }
+                    statusMessage = "Đang nhận dạng qua Groq Whisper large-v3-turbo..."
+                    text = try await GroqAsrService.shared.transcribe(
+                        audioFileURL: URL(fileURLWithPath: m.audioFilePath),
+                        apiKey: key
+                    ) { p in DispatchQueue.main.async { progressPercent = p } }
                 }
 
                 await MainActor.run {
                     store.updateTranscript(id: m.id, transcript: text)
                     loadMeetingData()
                     isProcessing = false
-                    statusMessage = "Chuyển văn bản thành công!"
+                    statusMessage = "Đã chuyển văn bản thành công!"
                 }
             } catch {
                 await MainActor.run {
@@ -338,33 +636,43 @@ public struct DetailView: View {
     }
 
     private func startSummarize() {
-        guard let m = meeting else { return }
-        let deepSeekKey = KeychainManager.shared.get(key: .deepSeekApiKey)
-        guard !deepSeekKey.isEmpty else {
-            errorMessage = "Vui lòng vào Cài đặt để nhập DeepSeek API Key"
-            return
-        }
+        guard let m = meeting, !m.transcript.isEmpty else { return }
+        let provider = KeychainManager.shared.get(key: .aiProvider, defaultValue: "DEEPSEEK")
 
         isProcessing = true
-        progressPercent = 10
-        statusMessage = "DeepSeek đang phân tích biên bản..."
+        progressPercent = 15
 
         Task {
             do {
-                let json = try await DeepSeekSummarizerService.shared.summarize(
-                    transcript: m.transcript,
-                    apiKey: deepSeekKey
-                ) { p in
-                    DispatchQueue.main.async {
-                        progressPercent = p
+                var json = ""
+                if provider == "GEMINI" {
+                    let key = KeychainManager.shared.get(key: .geminiApiKey)
+                    let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
+                    statusMessage = "Google Gemini đang tóm tắt biên bản..."
+                    json = try await GeminiService.shared.summarize(
+                        transcript: m.transcript,
+                        apiKey: key,
+                        proxyUrl: proxy
+                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                } else {
+                    // DeepSeek
+                    let key = KeychainManager.shared.get(key: .deepSeekApiKey)
+                    guard !key.isEmpty else {
+                        throw NSError(domain: "Settings", code: 401, userInfo: [NSLocalizedDescriptionKey: "Chưa nhập DeepSeek API Key trong Cài đặt."])
                     }
+                    statusMessage = "DeepSeek đang tóm tắt biên bản NĐ 30..."
+                    json = try await DeepSeekSummarizerService.shared.summarize(
+                        transcript: m.transcript,
+                        apiKey: key
+                    ) { p in DispatchQueue.main.async { progressPercent = p } }
                 }
 
                 await MainActor.run {
                     store.updateSummary(id: m.id, summaryJson: json)
                     loadMeetingData()
                     isProcessing = false
-                    statusMessage = "Tóm tắt thành công!"
+                    selectedTab = 1
+                    statusMessage = "Đã tóm tắt thành công!"
                 }
             } catch {
                 await MainActor.run {
@@ -374,14 +682,4 @@ public struct DetailView: View {
             }
         }
     }
-}
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

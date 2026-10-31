@@ -50,3 +50,4 @@ MeetingScribe_iOS/
    * `Privacy - Microphone Usage Description`: *"Ứng dụng cần sử dụng Microphone để ghi âm cuộc họp."*
    * `Required background modes`: `App plays audio or streams audio/video using AirPlay` (để ghi âm nền liên tục).
 5. Chọn thiết bị iPhone (hoặc iPhone Simulator) rồi nhấn **Run (Cmd + R)**.
+

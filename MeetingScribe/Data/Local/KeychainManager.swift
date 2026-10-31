@@ -2,7 +2,7 @@
 //  KeychainManager.swift
 //  MeetingScribe
 //
-//  Lưu trữ an toàn API key trong iOS Keychain (thay thế EncryptedSharedPreferences)
+//  Lưu trữ an toàn cấu hình và API key trong iOS Keychain
 //
 
 import Foundation
@@ -18,8 +18,11 @@ public class KeychainManager {
         case deepSeekApiKey = "KEY_DEEPSEEK_API_KEY"
         case groqApiKey = "KEY_GROQ_API_KEY"
         case geminiProxyUrl = "KEY_GEMINI_PROXY_URL"
-        case asrEngine = "KEY_ASR_ENGINE"
-        case aiProvider = "KEY_AI_PROVIDER"
+        case asrEngine = "KEY_ASR_ENGINE"          // "GROQ", "GEMINI", "WHISPER"
+        case aiProvider = "KEY_AI_PROVIDER"        // "DEEPSEEK", "GEMINI"
+        case defaultOrg = "KEY_DEFAULT_ORG"
+        case defaultChair = "KEY_DEFAULT_CHAIR"
+        case defaultSecretary = "KEY_DEFAULT_SECRETARY"
     }
 
     private init() {}
@@ -31,7 +34,10 @@ public class KeychainManager {
     }
 
     public func save(key: Key, value: String) {
-        let cleanValue = sanitize(value)
+        let cleanValue = (key == .asrEngine || key == .aiProvider || key == .defaultOrg || key == .defaultChair || key == .defaultSecretary)
+            ? value.trimmingCharacters(in: .whitespacesAndNewlines)
+            : sanitize(value)
+
         guard let data = cleanValue.data(using: .utf8) else { return }
 
         // Xóa item cũ nếu có
@@ -48,7 +54,7 @@ public class KeychainManager {
         SecItemAdd(query as CFDictionary, nil)
     }
 
-    public func get(key: Key) -> String {
+    public func get(key: Key, defaultValue: String = "") -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -61,9 +67,10 @@ public class KeychainManager {
         let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
 
         if status == errSecSuccess, let data = dataTypeRef as? Data, let str = String(data: data, encoding: .utf8) {
-            return sanitize(str)
+            let res = str.trimmingCharacters(in: .whitespacesAndNewlines)
+            return res.isEmpty ? defaultValue : res
         }
-        return ""
+        return defaultValue
     }
 
     public func delete(key: Key) {

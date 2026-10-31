@@ -39,3 +39,4 @@ public struct AiEndpoints {
         return proxyBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
+

@@ -214,3 +214,4 @@ class RecorderDelegateBridge: AudioRecorderDelegate {
 
     func audioRecorderStatusDidChange(status: RecorderStatus) {}
 }
+

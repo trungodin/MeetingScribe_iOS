@@ -26,3 +26,4 @@ public enum MeetingStatus: String, Codable, CaseIterable {
         }
     }
 }
+
