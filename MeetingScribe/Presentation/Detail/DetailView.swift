@@ -126,11 +126,7 @@ public struct DetailView: View {
 
     private func loadMeetingData() {
         meeting = store.getMeeting(id: meetingId)
-        if let audioURL = meeting?.resolvedAudioURL {
-            if let player = try? AVAudioPlayer(contentsOf: audioURL) {
-                totalDuration = player.duration
-            }
-        }
+        setupAudioPlayer()
     }
 
     // MARK: - 1. Audio Player Card (Seekbar + Tua lùi / tới 5s)
@@ -164,6 +160,9 @@ public struct DetailView: View {
                 get: { playbackPosition },
                 set: { newVal in
                     playbackPosition = newVal
+                    if audioPlayer == nil {
+                        setupAudioPlayer()
+                    }
                     audioPlayer?.currentTime = newVal
                 }
             ), in: 0...max(1, totalDuration > 0 ? totalDuration : 1))
@@ -547,10 +546,34 @@ public struct DetailView: View {
 
     // MARK: - Audio Logic
 
+    private func setupAudioPlayer() {
+        guard let audioURL = meeting?.resolvedAudioURL else { return }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+
+            let player = try AVAudioPlayer(contentsOf: audioURL)
+            player.prepareToPlay()
+            self.audioPlayer = player
+            self.totalDuration = player.duration
+        } catch {
+            print("setupAudioPlayer error: \(error)")
+        }
+    }
+
     private func togglePlayAudio() {
         guard let audioURL = meeting?.resolvedAudioURL else {
             errorMessage = "File âm thanh không tồn tại trên thiết bị"
             return
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+        } catch {
+            print("AVAudioSession setCategory error: \(error)")
         }
 
         if isPlaying {
@@ -560,31 +583,55 @@ public struct DetailView: View {
         } else {
             if audioPlayer == nil {
                 do {
-                    audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
-                    totalDuration = audioPlayer?.duration ?? 0
+                    let player = try AVAudioPlayer(contentsOf: audioURL)
+                    player.prepareToPlay()
+                    audioPlayer = player
+                    totalDuration = player.duration
                 } catch {
                     errorMessage = "Không thể phát audio: \(error.localizedDescription)"
                     return
                 }
             }
 
-            audioPlayer?.play()
-            isPlaying = true
+            guard let player = audioPlayer else { return }
 
-            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                guard let player = audioPlayer else { return }
-                if player.isPlaying {
-                    playbackPosition = player.currentTime
-                } else {
-                    isPlaying = false
+            // Nếu đã phát gần hết hoặc hết file, bấm play sẽ tua lại từ đầu
+            if player.currentTime >= player.duration - 0.2 {
+                player.currentTime = 0
+                playbackPosition = 0
+            }
+
+            if player.play() {
+                isPlaying = true
+                startPlaybackTimer()
+            } else {
+                errorMessage = "Không thể bắt đầu phát âm thanh. Vui lòng thử lại."
+            }
+        }
+    }
+
+    private func startPlaybackTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            guard let player = audioPlayer else { return }
+            if player.isPlaying {
+                playbackPosition = player.currentTime
+            } else {
+                // Đã dừng hoặc phát xong hết file
+                isPlaying = false
+                if player.currentTime >= player.duration - 0.2 {
                     playbackPosition = 0
-                    playbackTimer?.invalidate()
+                    player.currentTime = 0
                 }
+                playbackTimer?.invalidate()
             }
         }
     }
 
     private func seekBy(_ seconds: Double) {
+        if audioPlayer == nil {
+            setupAudioPlayer()
+        }
         guard let player = audioPlayer else { return }
         let target = max(0, min(player.duration, player.currentTime + seconds))
         player.currentTime = target

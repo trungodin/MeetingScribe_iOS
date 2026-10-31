@@ -14,6 +14,7 @@ public struct RecordView: View {
     @State private var showingStopAlert = false
     @State private var navigateToDetailId: Int64?
     @State private var errorMessage: String?
+    @State private var strongBridge: RecorderDelegateBridge?
 
     public init() {}
 
@@ -112,6 +113,7 @@ public struct RecordView: View {
                 startNewRecording()
             }
             .onDisappear {
+                strongBridge = nil
                 AudioRecorder.shared.delegate = nil
             }
         }
@@ -148,7 +150,7 @@ public struct RecordView: View {
                 return
             }
 
-            recorder.delegate = RecorderDelegateBridge { amp in
+            let bridge = RecorderDelegateBridge { amp in
                 DispatchQueue.main.async {
                     if amplitudes.count > 0 {
                         amplitudes.removeFirst()
@@ -156,6 +158,8 @@ public struct RecordView: View {
                     }
                 }
             }
+            self.strongBridge = bridge
+            recorder.delegate = bridge
 
             do {
                 _ = try recorder.startRecording()

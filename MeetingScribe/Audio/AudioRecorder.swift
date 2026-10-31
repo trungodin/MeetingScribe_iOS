@@ -65,7 +65,7 @@ public class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate 
         }
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         let fileName = "meeting_\(Int(Date().timeIntervalSince1970 * 1000)).m4a"
