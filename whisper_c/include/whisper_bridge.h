@@ -24,3 +24,4 @@ void ms_whisper_free(void* ctx);
 #endif
 
 #endif // WHISPER_BRIDGE_H
+

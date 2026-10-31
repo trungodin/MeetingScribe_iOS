@@ -20,12 +20,14 @@ let package = Package(
             cSettings: [
                 .headerSearchPath("include"),
                 .headerSearchPath("."),
-                .define("WHISPER_VERSION", to: "\"1.7.4\"")
+                .define("WHISPER_VERSION", to: "\"1.7.4\""),
+                .define("GGML_USE_CPU")
             ],
             cxxSettings: [
                 .headerSearchPath("include"),
                 .headerSearchPath("."),
-                .define("WHISPER_VERSION", to: "\"1.7.4\"")
+                .define("WHISPER_VERSION", to: "\"1.7.4\""),
+                .define("GGML_USE_CPU")
             ]
         ),
         .target(
