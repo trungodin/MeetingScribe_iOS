@@ -7,6 +7,7 @@
 
 import Foundation
 import AVFoundation
+import whisper_c
 
 public class WhisperEngine {
     public static let shared = WhisperEngine()
@@ -41,7 +42,7 @@ public class WhisperEngine {
 
         onProgress?(50)
 
-        // Thực thi nhận diện giọng nói
+        // Thực thi nhận diện giọng nói bằng whisper.cpp native engine
         let resultText = try await runWhisperInference(samples: samples, modelPath: modelURL.path, onProgress: onProgress)
         onProgress?(100)
         return resultText
@@ -109,12 +110,37 @@ public class WhisperEngine {
     }
 
     private func runWhisperInference(samples: [Float], modelPath: String, onProgress: ((Int) -> Void)?) async throws -> String {
-        // Mô phỏng / chuẩn hóa luồng suy diễn nội bộ
-        try await Task.sleep(nanoseconds: 1_500_000_000)
-        onProgress?(80)
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        
-        return "Bản ghi âm đã được nhận dạng thành công bằng mô hình Whisper Offline trên thiết bị."
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let ctx = ms_whisper_init(modelPath) else {
+                    continuation.resume(throwing: NSError(domain: "WhisperEngine", code: -5, userInfo: [NSLocalizedDescriptionKey: "Không thể nạp mô hình Whisper từ: \(modelPath)"]))
+                    return
+                }
+                defer {
+                    ms_whisper_free(ctx)
+                }
+
+                onProgress?(60)
+
+                let textPtr = samples.withUnsafeBufferPointer { ptr -> UnsafeMutablePointer<CChar>? in
+                    guard let baseAddr = ptr.baseAddress else { return nil }
+                    return ms_whisper_transcribe(ctx, baseAddr, Int32(samples.count))
+                }
+
+                onProgress?(90)
+
+                guard let textPtr = textPtr else {
+                    continuation.resume(returning: "")
+                    return
+                }
+                defer {
+                    ms_whisper_free_string(textPtr)
+                }
+
+                let transcript = String(cString: textPtr).trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.resume(returning: transcript)
+            }
+        }
     }
 }
 

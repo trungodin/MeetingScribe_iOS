@@ -1,0 +1,7 @@
+#ifndef GGML_VERSION_H
+#define GGML_VERSION_H
+
+#define GGML_VERSION 1
+#define GGML_COMMIT "231638a"
+
+#endif // GGML_VERSION_H
