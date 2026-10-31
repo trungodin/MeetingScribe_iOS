@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "MeetingScribe",
     platforms: [
-        .iOS(.v16)
+        .iOS(.v17)
     ],
     products: [
         .library(
@@ -24,3 +24,4 @@ let package = Package(
         )
     ]
 )
+

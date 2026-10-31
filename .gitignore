@@ -1,0 +1,4 @@
+.build/
+xtool/
+build.log
+.DS_Store

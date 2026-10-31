@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct Meeting: Identifiable, Codable, Equatable {
+public struct Meeting: Identifiable, Codable, Equatable, Hashable {
     public var id: Int64
     public var title: String
     public var audioFilePath: String
@@ -67,3 +67,4 @@ public struct Meeting: Identifiable, Codable, Equatable {
         return formatter.string(from: date)
     }
 }
+
