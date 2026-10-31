@@ -25,12 +25,14 @@ public struct DetailView: View {
 
     // Tiến trình AI
     @State private var isProcessing = false
-    @State private var progressPercent = 0
+    @State private var progressPercent: Double = 0
     @State private var statusMessage = ""
     @State private var errorMessage: String?
     // Giữ handle để huỷ job đang chạy + mốc thời gian bắt đầu (hiển thị "đã chạy bao lâu")
     @State private var processingTask: Task<Void, Never>?
     @State private var processingStartedAt: Date?
+    // Lần cuối nhận được mốc tiến trình mới (để biết app còn "sống" hay đã treo)
+    @State private var lastProgressAt: Date?
 
     // Xuất file & Edit trước khi xuất
     @State private var showingEditExportSheet = false
@@ -378,23 +380,27 @@ public struct DetailView: View {
 
     private var processingCard: some View {
         VStack(spacing: 8) {
-            ProgressView(value: Double(progressPercent), total: 100)
+            ProgressView(value: progressPercent, total: 100)
             HStack {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .lineLimit(2)
                 Spacer()
-                Text("\(progressPercent)%")
+                Text(String(format: "%.1f%%", progressPercent))
                     .font(.caption)
                     .fontWeight(.bold)
+                    .monospacedDigit()
             }
 
             if let startedAt = processingStartedAt {
                 HStack {
                     TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                        Label(Self.elapsedText(from: startedAt, to: context.date), systemImage: "clock")
+                        Text(Self.progressFootnote(startedAt: startedAt, lastProgressAt: lastProgressAt, progressPercent: progressPercent, now: context.date))
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
                     }
                     Spacer()
                     Button(role: .destructive, action: cancelProcessing) {
@@ -408,6 +414,37 @@ public struct DetailView: View {
         .padding(12)
         .background(Color(.tertiarySystemGroupedBackground))
         .cornerRadius(10)
+    }
+
+    /// Dòng chân: đã chạy bao lâu + ước lượng còn lại + cảnh báo khi lâu không có mốc mới
+    static func progressFootnote(startedAt: Date, lastProgressAt: Date?, progressPercent: Double, now: Date) -> String {
+        var parts: [String] = [elapsedText(from: startedAt, to: now)]
+
+        // Ước lượng thời gian còn lại theo tốc độ trung bình (mốc 10% = lúc bắt đầu suy diễn)
+        let elapsed = now.timeIntervalSince(startedAt)
+        let doneRange = progressPercent - 10.0
+        if elapsed > 8, doneRange > 3, progressPercent < 100 {
+            let secondsPerPercent = elapsed / doneRange
+            let remaining = max(0, (98.0 - progressPercent) * secondsPerPercent)
+            parts.append("còn ~" + shortDuration(remaining))
+        }
+
+        // Chỉ báo khi thật sự lâu không nhích (whisper đang xử lý 1 chunk nặng hoặc bị chặn)
+        if let last = lastProgressAt {
+            let idle = max(0, Int(now.timeIntervalSince(last)))
+            if idle >= 20 {
+                parts.append("chờ \(idle)s")
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Rút gọn thời lượng: 40 -> "40s", 720 -> "12 phút", 3900 -> "1g05p"
+    static func shortDuration(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60) phút" }
+        return String(format: "%dg%02dp", total / 3600, (total % 3600) / 60)
     }
 
     static func elapsedText(from start: Date, to now: Date) -> String {
@@ -713,6 +750,7 @@ public struct DetailView: View {
         isProcessing = true
         progressPercent = 10
         processingStartedAt = Date()
+        lastProgressAt = Date()
         processingTask?.cancel()
 
         processingTask = Task {
@@ -721,8 +759,18 @@ public struct DetailView: View {
                 if engine == "WHISPER" {
                     statusMessage = "Đang nhận dạng bằng Whisper Offline (trên máy)..."
                     text = try await WhisperEngine.shared.transcribe(
-                        audioFileURL: audioURL
-                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                        audioFileURL: audioURL,
+                        onProgress: { p in
+                            DispatchQueue.main.async {
+                                // Không cho thanh tiến trình chạy lùi (engine báo 8% đầu tiên)
+                                progressPercent = max(progressPercent, p)
+                                lastProgressAt = Date()
+                            }
+                        },
+                        onStatus: { stage in
+                            DispatchQueue.main.async { statusMessage = stage }
+                        }
+                    )
                 } else if engine == "GEMINI" {
                     let key = KeychainManager.shared.get(key: .geminiApiKey)
                     let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
@@ -731,7 +779,12 @@ public struct DetailView: View {
                         audioFileURL: audioURL,
                         apiKey: key,
                         proxyUrl: proxy
-                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                    ) { p in
+                        DispatchQueue.main.async {
+                            progressPercent = Double(p)
+                            lastProgressAt = Date()
+                        }
+                    }
                 } else {
                     // Groq Whisper
                     let key = KeychainManager.shared.get(key: .groqApiKey)
@@ -742,7 +795,12 @@ public struct DetailView: View {
                     text = try await GroqAsrService.shared.transcribe(
                         audioFileURL: audioURL,
                         apiKey: key
-                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                    ) { p in
+                        DispatchQueue.main.async {
+                            progressPercent = Double(p)
+                            lastProgressAt = Date()
+                        }
+                    }
                 }
 
                 await MainActor.run {
@@ -783,6 +841,7 @@ public struct DetailView: View {
         isProcessing = true
         progressPercent = 15
         processingStartedAt = Date()
+        lastProgressAt = Date()
         processingTask?.cancel()
 
         processingTask = Task {
@@ -796,7 +855,12 @@ public struct DetailView: View {
                         transcript: m.transcript,
                         apiKey: key,
                         proxyUrl: proxy
-                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                    ) { p in
+                        DispatchQueue.main.async {
+                            progressPercent = Double(p)
+                            lastProgressAt = Date()
+                        }
+                    }
                 } else {
                     // DeepSeek
                     let key = KeychainManager.shared.get(key: .deepSeekApiKey)
@@ -807,7 +871,12 @@ public struct DetailView: View {
                     json = try await DeepSeekSummarizerService.shared.summarize(
                         transcript: m.transcript,
                         apiKey: key
-                    ) { p in DispatchQueue.main.async { progressPercent = p } }
+                    ) { p in
+                        DispatchQueue.main.async {
+                            progressPercent = Double(p)
+                            lastProgressAt = Date()
+                        }
+                    }
                 }
 
                 await MainActor.run {

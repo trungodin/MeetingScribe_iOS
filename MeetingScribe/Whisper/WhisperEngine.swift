@@ -17,9 +17,16 @@
 //  Cách xử lý trong file này:
 //  - Dùng progress_callback THẬT của whisper.cpp (bridge đã hỗ trợ sẵn) => % phản ánh đúng.
 //  - ms_whisper_set_n_threads(4) => nhanh hơn 4-6 lần.
-//  - Chia audio thành cửa sổ 10 phút: RAM giới hạn (~38 MB/cửa sổ), tiến độ mịn, huỷ được.
+//  - Chia audio thành cửa sổ 10 phút: RAM giới hạn (~38 MB/cửa sổ), huỷ được.
 //  - Đọc + convert audio theo block 8192 frame => không bao giờ nạp cả file vào RAM.
 //  - Hỗ trợ huỷ giữa chừng: Task cancellation -> ms_whisper_request_abort().
+//
+//  LƯU Ý VỀ ĐỘ MƯỢT CỦA THANH TIẾN TRÌNH (bản trước hiển thị % nguyên nên "kẹt"):
+//  whisper.cpp chỉ báo progress mỗi 30 giây audio (1 chunk). File 60 phút có ~120 chunk
+//  => mỗi chunk chỉ chiếm 88/120 ≈ 0,7% thanh tiến trình. Nếu hiển thị % nguyên thì thanh
+//  gần như đứng yên (nhất là lúc nạp model + chunk đầu tiên). Vì vậy:
+//    - onProgress báo Double (DetailView hiển thị 1 số lẻ, ví dụ "12,4%").
+//    - onStatus báo rõ đang ở giai đoạn nào + cửa sổ thứ mấy (biết app vẫn đang chạy).
 //
 
 import Foundation
@@ -47,7 +54,11 @@ public class WhisperEngine {
     /**
      * Nhận dạng offline file âm thanh bằng model Whisper GGML đã tải
      */
-    public func transcribe(audioFileURL: URL, onProgress: ((Int) -> Void)? = nil) async throws -> String {
+    public func transcribe(
+        audioFileURL: URL,
+        onProgress: ((Double) -> Void)? = nil,
+        onStatus: ((String) -> Void)? = nil
+    ) async throws -> String {
         guard let modelURL = WhisperModelManager.shared.getActiveModelURL() else {
             throw Self.makeError(404, "Chưa có model Whisper trên máy. Vui lòng vào Cài đặt để tải model.")
         }
@@ -56,16 +67,18 @@ public class WhisperEngine {
             throw Self.makeError(404, "File âm thanh không tồn tại")
         }
 
-        onProgress?(10)
+        onStatus?("Đang đọc thông tin file âm thanh…")
+        onProgress?(8.0)
 
         let duration = try await Self.audioDuration(of: audioFileURL)
         guard duration > 0.5 else {
             throw Self.makeError(400, "File âm thanh không có dữ liệu")
         }
 
-        onProgress?(12)
+        onProgress?(10.0)
 
         // Nạp model 1 lần cho tất cả cửa sổ (nạp lại mỗi cửa sổ tốn vài giây/lần)
+        onStatus?("Đang nạp model Whisper (\(modelURL.lastPathComponent))…")
         guard let ctx = ms_whisper_init(modelURL.path) else {
             throw Self.makeError(-5, "Không thể nạp mô hình Whisper từ: \(modelURL.path)")
         }
@@ -81,6 +94,9 @@ public class WhisperEngine {
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
 
+            let windowLabel = "cửa sổ \(index + 1)/\(windows.count)"
+            onStatus?("Đang đọc audio (\(windowLabel))…")
+
             let samples = try await Self.decodeSamples(
                 audioFileURL,
                 startSeconds: window.start,
@@ -91,18 +107,25 @@ public class WhisperEngine {
 
             let base = Double(index) / Double(windows.count)
             let span = 1.0 / Double(windows.count)
+            // Dải % của riêng cửa sổ này trong toàn bộ thanh tiến trình (10 → 98)
+            let windowStart = 10.0 + base * 88.0
+            let windowEnd = 10.0 + (base + span) * 88.0
 
             if samples.isEmpty {
-                onProgress?(min(98, Int(12.0 + (base + span) * 86.0)))
+                onProgress?(min(98.0, windowEnd))
                 continue
             }
+
+            onStatus?("Đang nhận dạng (\(windowLabel), \(Self.shortTime(window.start))–\(Self.shortTime(window.start + window.length)))…")
+            onProgress?(min(98.0, windowStart))
 
             ms_whisper_reset_abort()
             let text = try await withTaskCancellationHandler {
                 try await Self.runInference(ctx: ctx, samples: samples) { localPercent in
                     // localPercent 0..100 theo đúng seek position của whisper.cpp
-                    let mapped = 12.0 + (base + span * Double(localPercent) / 100.0) * 86.0
-                    onProgress?(max(12, min(98, Int(mapped))))
+                    let ratio = Double(localPercent) / 100.0
+                    let mapped = windowStart + (windowEnd - windowStart) * ratio
+                    onProgress?(max(10.0, min(98.0, mapped)))
                 }
             } onCancel: {
                 // Dừng ngay bên trong whisper_full() ở lần kiểm tra kế tiếp
@@ -116,14 +139,27 @@ public class WhisperEngine {
                 pieces.append(trimmed)
             }
 
-            onProgress?(min(98, Int(12.0 + (base + span) * 86.0)))
+            onProgress?(min(98.0, windowEnd))
         }
 
         try Task.checkCancellation()
 
+        onStatus?("Đang ghép văn bản…")
         let merged = Self.mergeWindows(pieces)
-        onProgress?(100)
+        onProgress?(100.0)
         return merged
+    }
+
+    /// Định dạng mốc thời gian trong audio: 65 -> "1:05", 3725 -> "1:02:05"
+    static func shortTime(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
     }
 
     // MARK: - Cửa sổ suy diễn
