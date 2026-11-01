@@ -30,6 +30,7 @@ public struct DiagnosticsView: View {
                         Image(systemName: summaryIcon)
                             .font(.title2)
                             .foregroundColor(summaryColor)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(summaryTitle)
                                 .font(.headline)
@@ -38,6 +39,7 @@ public struct DiagnosticsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                    .accessibilityElement(children: .combine)
 
                     Button {
                         runChecks()
@@ -91,8 +93,9 @@ public struct DiagnosticsView: View {
                         } else {
                             ForEach(logs) { entry in
                                 Text(entry.line)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(.caption2.monospaced())
                                     .foregroundColor(color(for: entry.level))
+                                    .textSelection(.enabled)
                             }
                         }
                     }
@@ -122,6 +125,7 @@ public struct DiagnosticsView: View {
             Image(systemName: result.passed ? "checkmark.circle.fill" : "xmark.octagon.fill")
                 .foregroundColor(result.passed ? .green : .red)
                 .padding(.top, 1)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(result.name)
                     .font(.subheadline)
@@ -131,6 +135,8 @@ public struct DiagnosticsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(result.passed ? "Đạt" : "Chưa đạt")
     }
 
     // MARK: - Hành động

@@ -67,10 +67,13 @@ public struct HomeView: View {
                                 Image(systemName: "square.and.arrow.down")
                             }
                         }
+                        .accessibilityLabel("Thêm file ghi âm")
+                        .accessibilityHint("Chọn file âm thanh có sẵn trên máy để chuyển văn bản")
 
                         Button(action: { showingSettings = true }) {
                             Image(systemName: "gearshape")
                         }
+                        .accessibilityLabel("Cài đặt")
                     }
                 }
             }
@@ -149,6 +152,7 @@ public struct HomeView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
+                .accessibilityLabel("Xoá nội dung tìm kiếm")
             }
         }
         .padding(10)
@@ -225,6 +229,7 @@ public struct HomeView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.secondary)
             }
+            .accessibilityLabel("Đóng cảnh báo")
         }
         .padding(10)
         .background(Color.orange.opacity(0.12))
@@ -359,6 +364,9 @@ public struct MeetingRowView: View {
                 .cornerRadius(6)
         }
         .padding(.vertical, 4)
+        // VoiceOver đọc cả hàng như một mục (tên + thời gian + trạng thái) thay vì 3 mục rời
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Chạm để mở chi tiết cuộc họp")
     }
 
     private var statusColor: Color {

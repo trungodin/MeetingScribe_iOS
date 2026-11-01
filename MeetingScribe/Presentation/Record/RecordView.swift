@@ -9,6 +9,7 @@ import SwiftUI
 
 public struct RecordView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var recorder = AudioRecorder.shared
     @State private var amplitudes: [CGFloat] = Array(repeating: 0.1, count: 40)
     @State private var showingStopAlert = false
@@ -27,6 +28,7 @@ public struct RecordView: View {
                 Text(formattedTime(recorder.currentDuration))
                     .font(.system(size: 56, weight: .bold, design: .monospaced))
                     .foregroundColor(.primary)
+                    .accessibilityLabel("Đã ghi " + formattedTime(recorder.currentDuration))
 
                 // 2. Trạng thái
                 Text(statusText)
@@ -39,11 +41,13 @@ public struct RecordView: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(recorder.status == .recording ? Color.red : Color.gray.opacity(0.5))
                             .frame(width: 4, height: max(6, amplitudes[idx] * 120))
-                            .animation(.easeOut(duration: 0.08), value: amplitudes[idx])
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: amplitudes[idx])
                     }
                 }
                 .frame(height: 130)
                 .padding(.horizontal, 24)
+                // Cột sóng chỉ để trang trí — VoiceOver đọc trạng thái + thời lượng là đủ
+                .accessibilityHidden(true)
 
                 Spacer()
 
@@ -58,6 +62,8 @@ public struct RecordView: View {
                             .background(Color.gray.opacity(0.8))
                             .clipShape(Circle())
                     }
+                    .accessibilityLabel("Huỷ bản ghi âm")
+                    .accessibilityHint("Xoá đoạn vừa ghi và đóng màn hình ghi âm")
 
                     // Nút Dừng & Lưu
                     Button(action: { showingStopAlert = true }) {
@@ -69,6 +75,7 @@ public struct RecordView: View {
                             .clipShape(Circle())
                             .shadow(color: Color.red.opacity(0.4), radius: 8, x: 0, y: 4)
                     }
+                    .accessibilityLabel("Dừng và lưu cuộc họp")
 
                     // Nút Pause / Resume
                     Button(action: togglePause) {
@@ -79,6 +86,7 @@ public struct RecordView: View {
                             .background(Color.blue)
                             .clipShape(Circle())
                     }
+                    .accessibilityLabel(recorder.status == .recording ? "Tạm dừng ghi âm" : "Tiếp tục ghi âm")
                 }
                 .padding(.bottom, 48)
             }

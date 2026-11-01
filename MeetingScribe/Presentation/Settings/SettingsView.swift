@@ -143,6 +143,7 @@ public struct SettingsView: View {
                                 Image(systemName: showGroqKey ? "eye.slash" : "eye")
                                     .foregroundColor(.secondary)
                             }
+                            .accessibilityLabel(showGroqKey ? "Ẩn Groq API Key" : "Hiện Groq API Key")
                         }
                     }
 
@@ -162,6 +163,7 @@ public struct SettingsView: View {
                                 Image(systemName: showDeepSeekKey ? "eye.slash" : "eye")
                                     .foregroundColor(.secondary)
                             }
+                            .accessibilityLabel(showDeepSeekKey ? "Ẩn DeepSeek API Key" : "Hiện DeepSeek API Key")
                         }
                     }
 
@@ -181,6 +183,7 @@ public struct SettingsView: View {
                                 Image(systemName: showGeminiKey ? "eye.slash" : "eye")
                                     .foregroundColor(.secondary)
                             }
+                            .accessibilityLabel(showGeminiKey ? "Ẩn Gemini API Key" : "Hiện Gemini API Key")
                         }
                     }
 
