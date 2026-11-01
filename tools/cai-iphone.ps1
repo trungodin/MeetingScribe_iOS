@@ -21,7 +21,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $env:PYTHONWARNINGS = 'ignore'      # an canh bao urllib3/chardet cua pymobiledevice3
 
-$bundleId  = 'com.example.meetingscribe'
+# xtool tu them tien to "XTL-<TEAMID>." khi ky bang tai khoan mien phi, nen tren may
+# bundle ID thuc te la: XTL-NTZRS3A969.com.example.meetingscribe
+$bundleSuffix = 'com.example.meetingscribe'
 $repoIpa   = 'd:\MeetingScribe_iOS\xtool\MeetingScribe.ipa'
 $windowsIpa = Join-Path $env:USERPROFILE 'Downloads\MeetingScribe-signed.ipa'
 
@@ -62,8 +64,11 @@ if (-not (Get-Command pymobiledevice3 -ErrorAction SilentlyContinue)) {
 
 # ---------------------------------------------------------------- 4. tim iPhone
 Step 'Tim iPhone qua usbmux...'
-$list = & pymobiledevice3 usbmux list 2>$null
-$listText = ($list | Out-String).Trim()
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'   # pymobiledevice3 ghi log ra stderr -> khong duoc de no nem loi
+$list = & pymobiledevice3 usbmux list 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
+$listText = $list.Trim()
 if (-not $listText -or $listText -eq '[]') {
     Warn 'Chua thay iPhone nao.'
     Write-Host @'
@@ -82,8 +87,30 @@ Ok 'Da thay iPhone.'
 
 # ---------------------------------------------------------------- 5. cai
 Step 'Dang cai app len iPhone (giu nguyen du lieu cu trong app)...'
-& pymobiledevice3 apps install $Ipa
-if ($LASTEXITCODE -ne 0) { Warn "Cai that bai (exit $LASTEXITCODE)."; exit $LASTEXITCODE }
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$log = & pymobiledevice3 apps install $Ipa 2>&1 | Out-String
+$code = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
 
-Ok "Da cai '$bundleId' len iPhone."
-Write-Host 'Mo app "MeetingScribe" tren man hinh chinh de kiem tra.'
+if ($log -notmatch 'Installation succeed|InstallComplete') {
+    $log.Trim() -split "`n" | Select-Object -Last 12
+    Warn "Cai that bai (exit $code). Xem thong bao phia tren."
+    exit 1
+}
+Ok 'Thiet bi bao: Installation succeed.'
+
+# ---------------------------------------------------------------- 6. xac minh
+Step 'Xac minh app da co tren may...'
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$apps = & pymobiledevice3 apps list 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
+
+$idLine = ($apps -split "`n") | Select-String -Pattern $bundleSuffix -SimpleMatch | Select-Object -First 1
+if ($idLine) {
+    Ok ('Bundle da cai: ' + $idLine.Line.Trim().TrimEnd(':', '{'))
+} else {
+    Warn 'Cai xong nhung khong thay trong danh sach app - thu mo app tren iPhone.'
+}
+Write-Host 'Mo app "MeetingScribe VN" tren man hinh chinh de kiem tra.'
