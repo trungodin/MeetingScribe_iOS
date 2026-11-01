@@ -958,7 +958,6 @@ public struct DetailView: View {
         }
     }
 
-
     /// Bỏ các ký tự không hợp lệ trong tên file (Windows/iOS/Share sheet)
     static func safeFileName(_ raw: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")

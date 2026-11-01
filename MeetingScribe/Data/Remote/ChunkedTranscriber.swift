@@ -186,6 +186,7 @@ public final class ChunkedTranscriber {
 
         return Outcome(text: parts.joined(separator: "\n\n"), chunkCount: total, segments: segments)
     }
+
     // MARK: - Thử lại khi lỗi tạm thời
 
     /// Chạy `operation`, tự thử lại khi gặp lỗi tạm thời (mất mạng/timeout/429/5xx).
