@@ -262,6 +262,16 @@ public struct DetailView: View {
                         Spacer()
 
                         if !isEditingTranscript {
+                            // Copy nhanh văn bản gốc
+                            Button {
+                                UIPasteboard.general.string = meeting.transcript
+                                errorMessage = "Đã copy văn bản vào bộ nhớ tạm."
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .font(.caption)
+                            .disabled(isProcessing)
+
                             Button("Sửa") { startEditingTranscript(meeting) }
                                 .font(.caption)
                                 .disabled(isProcessing)
@@ -404,6 +414,18 @@ public struct DetailView: View {
 
     private func summaryContentView(summary: MeetingSummary) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                // Copy nhanh biên bản dạng chữ (dán vào Zalo/Email mà không cần xuất file)
+                Button {
+                    UIPasteboard.general.string = summary.plainText
+                    errorMessage = "Đã copy biên bản vào bộ nhớ tạm."
+                } label: {
+                    Label("Copy biên bản", systemImage: "doc.on.doc")
+                        .font(.caption)
+                }
+                Spacer()
+            }
+
             Group {
                 summaryRow(title: "Cuộc họp:", value: summary.tenCuocHop)
                 summaryRow(title: "Thời gian:", value: summary.thoiGian)
@@ -595,32 +617,27 @@ public struct DetailView: View {
     // MARK: - 4. Bottom Action Bar
 
     private func bottomActionBar(meeting: Meeting) -> some View {
-        HStack(spacing: 12) {
-            // Nút Xuất Word NĐ30
+        HStack(spacing: 10) {
+            // Xuất Word NĐ 30
             Button(action: openEditExportModal) {
-                HStack {
-                    Image(systemName: "doc.fill")
-                    Text("Xuất Word NĐ30")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(meeting.summaryJson.isEmpty ? Color.gray : Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(12)
+                actionLabel(icon: "doc.fill", title: "Word NĐ 30")
+                    .background(meeting.summaryJson.isEmpty ? Color.gray : Color.blue)
             }
             .disabled(meeting.summaryJson.isEmpty || isProcessing)
 
-            // Nút Chia sẻ
+            // Xuất PDF (cùng dữ liệu biên bản, tiện gửi Zalo/Email và in luôn)
+            Button {
+                exportPdf(meeting: meeting)
+            } label: {
+                actionLabel(icon: "doc.richtext", title: "PDF")
+                    .background(meeting.summaryJson.isEmpty ? Color.gray : Color.indigo)
+            }
+            .disabled(meeting.summaryJson.isEmpty || isProcessing)
+
+            // Chia sẻ file đã xuất
             Button(action: shareExportedFile) {
-                HStack {
-                    Image(systemName: "square.and.arrow.up")
-                    Text("Chia sẻ")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(meeting.exportFilePath.isEmpty ? Color.gray.opacity(0.4) : Color.green)
-                .foregroundColor(.white)
-                .cornerRadius(12)
+                actionLabel(icon: "square.and.arrow.up", title: "Chia sẻ")
+                    .background(meeting.exportFilePath.isEmpty ? Color.gray.opacity(0.4) : Color.green)
             }
             .disabled(meeting.exportFilePath.isEmpty)
         }
@@ -628,6 +645,22 @@ public struct DetailView: View {
         .padding(.vertical, 12)
         .background(Color(.systemBackground))
         .shadow(color: Color.black.opacity(0.05), radius: 5, y: -2)
+    }
+
+    /// Nhãn nút hành động ở thanh dưới (icon + chữ, tự co giãn đều nhau)
+    private func actionLabel(icon: String, title: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+            Text(title)
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .foregroundColor(.white)
+        .cornerRadius(12)
     }
 
     // MARK: - 5. Modal Xem trước & Chỉnh sửa trước khi Xuất Word NĐ 30
@@ -902,6 +935,29 @@ public struct DetailView: View {
             return
         }
     }
+
+    // MARK: - Xuất PDF
+
+    /// Xuất biên bản ra PDF rồi mở bảng chia sẻ (gửi Zalo/Email, in trực tiếp, lưu vào Files).
+    /// Dùng cùng dữ liệu với bản Word NĐ 30 nên nội dung hai bản luôn khớp nhau.
+    private func exportPdf(meeting: Meeting) {
+        guard let summary = meeting.parsedSummary else {
+            errorMessage = "Vui lòng bấm Tóm tắt bằng AI trước khi xuất PDF."
+            return
+        }
+
+        let organization = KeychainManager.shared.get(key: .defaultOrg, defaultValue: "")
+        do {
+            let url = try PdfExporter.shared.exportToPdf(summary: summary, organizationName: organization)
+            guard ShareSheetPresenter.presentFile(at: url) else {
+                errorMessage = "Không mở được bảng chia sẻ cho file PDF."
+                return
+            }
+        } catch {
+            errorMessage = "Lỗi xuất PDF: \(error.localizedDescription)"
+        }
+    }
+
 
     /// Bỏ các ký tự không hợp lệ trong tên file (Windows/iOS/Share sheet)
     static func safeFileName(_ raw: String) -> String {

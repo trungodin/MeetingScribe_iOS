@@ -39,10 +39,8 @@ public class DocxExporter {
         let destinationURL = outputPath ?? exportsDir.appendingPathComponent(fileName)
 
         // 1. Chuẩn bị nội dung thay thế
-        let org = organizationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "ỦY BAN NHÂN DÂN"
-            : organizationName.uppercased()
-
+        // Lưu ý: template NĐ 30 đã in sẵn tên cơ quan ở phần đầu văn bản nên `organizationName`
+        // chỉ dùng cho bản PDF (PdfExporter) — nơi tiêu đề do app tự dựng.
         let title = summary.tenCuocHop.isEmpty ? "BIÊN BẢN CUỘC HỌP" : summary.tenCuocHop.uppercased()
         let time = summary.thoiGian.isEmpty ? "Không xác định" : summary.thoiGian
         let location = summary.diaDiem.isEmpty ? "Phòng họp cơ quan" : summary.diaDiem
@@ -90,7 +88,7 @@ public class DocxExporter {
             contentXml += """
             <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:b/><w:sz w:val="28"/><w:u w:val="single"/></w:rPr><w:t>III. ĐỀ XUẤT, KIẾN NGHỊ</w:t></w:r></w:p>
             """
-            for (idx, item) in summary.deXuat.enumerated() {
+            for item in summary.deXuat {
                 contentXml += """
                 <w:p><w:pPr><w:ind w:left="360"/><w:spacing w:after="60"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="26"/></w:rPr><w:t>• \(escapeXml(item))</w:t></w:r></w:p>
                 """
