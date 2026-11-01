@@ -28,9 +28,18 @@ public class KeychainManager {
     private init() {}
 
     public func sanitize(_ key: String) -> String {
-        return key.trimmingCharacters(in: .whitespacesAndNewlines)
+        var clean = key.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\r", with: "")
             .replacingOccurrences(of: "\n", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Người dùng hay copy kèm dấu nháy từ tài liệu/website: "AIza..." hoặc 'AIza...'
+        if clean.count >= 2,
+           (clean.hasPrefix("\"") && clean.hasSuffix("\"")) || (clean.hasPrefix("'") && clean.hasSuffix("'")) {
+            clean = String(clean.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return clean
     }
 
     public func save(key: Key, value: String) {

@@ -36,10 +36,6 @@ public struct DetailView: View {
 
     // Xuất file & Edit trước khi xuất
     @State private var showingEditExportSheet = false
-    @State private var showingShareSheet = false
-    @State private var exportedFileURL: URL?
-    @State private var shareAudioURL: URL?
-    @State private var showingAudioShareSheet = false
 
     // Dữ liệu chỉnh sửa trước khi xuất
     @State private var editTitle = ""
@@ -91,23 +87,10 @@ public struct DetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if let m = meeting, !m.exportFilePath.isEmpty {
-                    Button(action: {
-                        exportedFileURL = URL(fileURLWithPath: m.exportFilePath)
-                        showingShareSheet = true
-                    }) {
+                    Button(action: shareExportedFile) {
                         Image(systemName: "square.and.arrow.up")
                     }
                 }
-            }
-        }
-        .sheet(isPresented: $showingShareSheet) {
-            if let url = exportedFileURL {
-                ShareSheet(items: [url])
-            }
-        }
-        .sheet(isPresented: $showingAudioShareSheet) {
-            if let url = shareAudioURL {
-                ShareSheet(items: [url])
             }
         }
         .sheet(isPresented: $showingEditExportSheet) {
@@ -394,19 +377,30 @@ public struct DetailView: View {
             }
 
             if let startedAt = processingStartedAt {
-                HStack {
-                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    HStack(spacing: 8) {
+                        // Whisper chỉ báo % sau mỗi 30 GIÂY audio (1 khối).
+                        // Với file ngắn (1 khối) hoặc khối đầu tiên, thanh % buộc phải
+                        // đứng yên vài giây. Spinner này cho biết app vẫn đang xử lý.
+                        if Self.isWaitingForNextStep(lastProgressAt: lastProgressAt, now: context.date) {
+                            ProgressView()
+                                .scaleEffect(0.55)
+                                .frame(width: 14, height: 14)
+                        }
+
                         Text(Self.progressFootnote(startedAt: startedAt, lastProgressAt: lastProgressAt, progressPercent: progressPercent, now: context.date))
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .monospacedDigit()
                             .lineLimit(1)
-                    }
-                    Spacer()
-                    Button(role: .destructive, action: cancelProcessing) {
-                        Text("Huỷ")
-                            .font(.caption)
-                            .fontWeight(.semibold)
+
+                        Spacer()
+
+                        Button(role: .destructive, action: cancelProcessing) {
+                            Text("Huỷ")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
                     }
                 }
             }
@@ -414,6 +408,12 @@ public struct DetailView: View {
         .padding(12)
         .background(Color(.tertiarySystemGroupedBackground))
         .cornerRadius(10)
+    }
+
+    /// Đang chờ whisper xử lý nốt 1 khối 30 giây (chưa có mốc % mới) hay không
+    static func isWaitingForNextStep(lastProgressAt: Date?, now: Date) -> Bool {
+        guard let last = lastProgressAt else { return false }
+        return now.timeIntervalSince(last) >= 3
     }
 
     /// Dòng chân: đã chạy bao lâu + ước lượng còn lại + cảnh báo khi lâu không có mốc mới
@@ -429,10 +429,12 @@ public struct DetailView: View {
             parts.append("còn ~" + shortDuration(remaining))
         }
 
-        // Chỉ báo khi thật sự lâu không nhích (whisper đang xử lý 1 chunk nặng hoặc bị chặn)
+        // Chỉ báo khi thật sự lâu không nhích (whisper đang xử lý 1 khối nặng hoặc bị chặn)
         if let last = lastProgressAt {
             let idle = max(0, Int(now.timeIntervalSince(last)))
-            if idle >= 20 {
+            if idle >= 60 {
+                parts.append("chờ \(idle)s · vẫn xử lý")
+            } else if idle >= 20 {
                 parts.append("chờ \(idle)s")
             }
         }
@@ -486,12 +488,7 @@ public struct DetailView: View {
             .disabled(meeting.summaryJson.isEmpty || isProcessing)
 
             // Nút Chia sẻ
-            Button(action: {
-                if !meeting.exportFilePath.isEmpty {
-                    exportedFileURL = URL(fileURLWithPath: meeting.exportFilePath)
-                    showingShareSheet = true
-                }
-            }) {
+            Button(action: shareExportedFile) {
                 HStack {
                     Image(systemName: "square.and.arrow.up")
                     Text("Chia sẻ")
@@ -608,8 +605,7 @@ public struct DetailView: View {
                     loadMeetingData()
 
                     isProcessing = false
-                    exportedFileURL = docxURL
-                    showingShareSheet = true
+                    ShareSheetPresenter.present(items: [docxURL])
                 }
             } catch {
                 await MainActor.run {
@@ -721,13 +717,61 @@ public struct DetailView: View {
         playbackTimer?.invalidate()
     }
 
+    /// Chia sẻ file ghi âm gốc.
+    ///
+    /// Trước đây hàm này bật một `.sheet` chứa UIActivityViewController nên trên iOS mới
+    /// bảng chia sẻ hiện ra một ô ĐEN. Ngoài ra file ghi âm gốc nằm trong container của app
+    /// (UUID thay đổi sau mỗi lần build) nên tên file rất xấu. Vì vậy:
+    ///  1. Copy sang thư mục tạm với tên thân thiện = tên cuộc họp.
+    ///  2. Present bảng chia sẻ trực tiếp từ UIKit (ShareSheetPresenter).
     private func shareAudioFile() {
-        guard let audioURL = meeting?.resolvedAudioURL else {
+        guard let m = meeting else { return }
+        guard let audioURL = m.resolvedAudioURL else {
             errorMessage = "File âm thanh không tồn tại trên thiết bị."
             return
         }
-        shareAudioURL = audioURL
-        showingAudioShareSheet = true
+
+        let ext = audioURL.pathExtension.isEmpty ? "m4a" : audioURL.pathExtension
+        let prettyName = Self.safeFileName(m.title.isEmpty ? "Ghi am cuoc hop" : m.title) + "." + ext
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(prettyName)
+
+        var urlToShare = audioURL
+        do {
+            try? FileManager.default.removeItem(at: tempURL)
+            try FileManager.default.copyItem(at: audioURL, to: tempURL)
+            urlToShare = tempURL
+        } catch {
+            // Copy lỗi thì vẫn chia sẻ file gốc
+            urlToShare = audioURL
+        }
+
+        guard ShareSheetPresenter.presentFile(at: urlToShare) else {
+            errorMessage = "Không mở được file âm thanh để chia sẻ. Vui lòng thử lại."
+            return
+        }
+    }
+
+    /// Chia sẻ file Word (.docx) đã xuất
+    private func shareExportedFile() {
+        guard let m = meeting, !m.exportFilePath.isEmpty else {
+            errorMessage = "Chưa có file Word. Vui lòng bấm \"Xuất Word NĐ30\" trước."
+            return
+        }
+        let url = URL(fileURLWithPath: m.exportFilePath)
+        guard ShareSheetPresenter.presentFile(at: url) else {
+            errorMessage = "File Word không còn trên thiết bị. Vui lòng xuất lại."
+            return
+        }
+    }
+
+    /// Bỏ các ký tự không hợp lệ trong tên file (Windows/iOS/Share sheet)
+    static func safeFileName(_ raw: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
+        let cleaned = raw
+            .components(separatedBy: invalid)
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Ghi am cuoc hop" : String(cleaned.prefix(80))
     }
 
     private func formatDuration(_ sec: Double) -> String {
@@ -774,6 +818,16 @@ public struct DetailView: View {
                 } else if engine == "GEMINI" {
                     let key = KeychainManager.shared.get(key: .geminiApiKey)
                     let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
+                    // Thiếu API Key là nguyên nhân phổ biến nhất của lỗi 403 PERMISSION_DENIED
+                    // ("Method doesn't allow unregistered callers"). Báo ngay, rõ ràng.
+                    if AiEndpoints.isDirectCall(proxyBaseUrl: proxy),
+                       KeychainManager.shared.sanitize(key).isEmpty {
+                        throw NSError(
+                            domain: "Settings",
+                            code: 401,
+                            userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Gemini API Key.\nVào Cài đặt ➔ Google Gemini để dán API Key (lấy tại aistudio.google.com/apikey) rồi bấm Lưu."]
+                        )
+                    }
                     statusMessage = "Đang chuyển văn bản qua Google Gemini Flash..."
                     text = try await GeminiService.shared.transcribe(
                         audioFileURL: audioURL,

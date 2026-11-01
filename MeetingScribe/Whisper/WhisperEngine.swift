@@ -45,6 +45,10 @@ public class WhisperEngine {
     /// Kích thước block khi đọc file (giới hạn RAM khi convert)
     private static let readBlockFrames: AVAudioFrameCount = 8192
 
+    /// Tốc độ suy diễn của lần chạy gần nhất, ví dụ "1140s audio trong 480s (2.4× thời gian thực)".
+    /// Giúp người dùng biết máy có đủ nhanh hay nên chuyển sang model Base (nhẹ hơn).
+    public private(set) var lastRunSummary: String = ""
+
     private init() {}
 
     public func isAvailable() -> Bool {
@@ -79,9 +83,7 @@ public class WhisperEngine {
 
         // Nạp model 1 lần cho tất cả cửa sổ (nạp lại mỗi cửa sổ tốn vài giây/lần)
         onStatus?("Đang nạp model Whisper (\(modelURL.lastPathComponent))…")
-        guard let ctx = ms_whisper_init(modelURL.path) else {
-            throw Self.makeError(-5, "Không thể nạp mô hình Whisper từ: \(modelURL.path)")
-        }
+        let ctx = try await Self.loadModel(at: modelURL)
         defer { ms_whisper_free(ctx) }
 
         // 4 luồng: nhanh hơn single-thread 4-6 lần (trước đây bị ép cứng 1 luồng)
@@ -90,6 +92,9 @@ public class WhisperEngine {
 
         let windows = Self.makeWindows(duration: duration)
         var pieces: [String] = []
+        // Thời gian suy diễn / số giây audio của từng cửa sổ (để báo tốc độ thực tế)
+        var inferenceSeconds: [Double] = []
+        var processedAudioSeconds: [Double] = []
 
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
@@ -116,21 +121,38 @@ public class WhisperEngine {
                 continue
             }
 
-            onStatus?("Đang nhận dạng (\(windowLabel), \(Self.shortTime(window.start))–\(Self.shortTime(window.start + window.length)))…")
+            // whisper.cpp luôn xử lý theo khối 30 giây và chỉ gọi progress_callback khi
+            // BẮT ĐẦU mỗi khối. Biết trước số khối => hiển thị được "khối 3/20",
+            // người dùng thấy app vẫn tiến chứ không phải "đứng ở 10%".
+            let totalChunks = max(1, Int((window.length / 30.0).rounded(.up)))
+            let windowRange = "\(Self.shortTime(window.start))–\(Self.shortTime(window.start + window.length))"
+
+            onStatus?("Đang nhận dạng (\(windowLabel), \(windowRange))…")
             onProgress?(min(98.0, windowStart))
 
+            let windowStartedAt = Date()
             ms_whisper_reset_abort()
+
             let text = try await withTaskCancellationHandler {
                 try await Self.runInference(ctx: ctx, samples: samples) { localPercent in
                     // localPercent 0..100 theo đúng seek position của whisper.cpp
                     let ratio = Double(localPercent) / 100.0
                     let mapped = windowStart + (windowEnd - windowStart) * ratio
                     onProgress?(max(10.0, min(98.0, mapped)))
+
+                    if totalChunks > 1 {
+                        // +1 vì progress 0% = đang bắt đầu khối đầu tiên
+                        let chunk = min(totalChunks, max(1, Int(ratio * Double(totalChunks)) + 1))
+                        onStatus?("Đang nhận dạng (\(windowLabel)) khối \(chunk)/\(totalChunks) · \(windowRange)")
+                    }
                 }
             } onCancel: {
                 // Dừng ngay bên trong whisper_full() ở lần kiểm tra kế tiếp
                 ms_whisper_request_abort()
             }
+
+            inferenceSeconds.append(Date().timeIntervalSince(windowStartedAt))
+            processedAudioSeconds.append(window.length)
 
             try Task.checkCancellation()
 
@@ -144,7 +166,20 @@ public class WhisperEngine {
 
         try Task.checkCancellation()
 
-        onStatus?("Đang ghép văn bản…")
+        let totalAudio = processedAudioSeconds.reduce(0, +)
+        let totalInference = inferenceSeconds.reduce(0, +)
+        if totalAudio > 0, totalInference > 0 {
+            let speed = totalAudio / totalInference
+            lastRunSummary = String(
+                format: "%.0fs audio trong %.0fs (%.1f× thời gian thực)",
+                totalAudio, totalInference, speed
+            )
+            onStatus?("Đang ghép văn bản… (đã xử lý \(lastRunSummary))")
+        } else {
+            lastRunSummary = ""
+            onStatus?("Đang ghép văn bản…")
+        }
+
         let merged = Self.mergeWindows(pieces)
         onProgress?(100.0)
         return merged
@@ -335,6 +370,22 @@ public class WhisperEngine {
     }
 
     // MARK: - Suy diễn
+
+    /// Nạp model trên luồng nền.
+    /// `Task` tạo trong View kế thừa MainActor, nếu nạp model (0,5–3 giây với model 181MB)
+    /// ngay trên MainActor thì UI sẽ đứng hình ngay sau khi bấm "Chuyển văn bản"
+    /// => người dùng tưởng app treo (đúng hiện tượng "đứng ở 10%").
+    private static func loadModel(at url: URL) async throws -> UnsafeMutableRawPointer {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let ctx = ms_whisper_init(url.path) {
+                    continuation.resume(returning: ctx)
+                } else {
+                    continuation.resume(throwing: makeError(-5, "Không thể nạp mô hình Whisper từ: \(url.path)"))
+                }
+            }
+        }
+    }
 
     /// Hộp giữ closure tiến độ để truyền qua con trỏ user_data của C
     private final class ProgressBox {
