@@ -18,6 +18,12 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
     public var status: MeetingStatus
     public var createdAt: Int64
 
+    /// Số đoạn audio đã nhận dạng xong ở lần chạy gần nhất (để chạy tiếp khi lỗi mạng giữa chừng).
+    /// Optional vì database cũ chưa có trường này — decode vẫn phải chạy được.
+    public var transcribedChunkCount: Int?
+    /// Tổng số đoạn của lần chạy gần nhất, dùng để biết tiến trình cũ còn dùng lại được hay không
+    public var transcribedChunkTotal: Int?
+
     public init(
         id: Int64 = 0,
         title: String,
@@ -27,7 +33,9 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
         summaryJson: String = "",
         exportFilePath: String = "",
         status: MeetingStatus = .recorded,
-        createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+        createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000),
+        transcribedChunkCount: Int? = nil,
+        transcribedChunkTotal: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -38,6 +46,19 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
         self.exportFilePath = exportFilePath
         self.status = status
         self.createdAt = createdAt
+        self.transcribedChunkCount = transcribedChunkCount
+        self.transcribedChunkTotal = transcribedChunkTotal
+    }
+
+    /// Tiến trình nhận dạng dở dang còn dùng để chạy tiếp được (đã xong ≥1 đoạn nhưng chưa hết)
+    public var resumableTranscription: ChunkedTranscriber.ResumeState? {
+        guard let done = transcribedChunkCount,
+              let total = transcribedChunkTotal,
+              done > 0, total > done,
+              !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return ChunkedTranscriber.ResumeState(completedChunks: done, totalChunks: total, text: transcript)
     }
 
     public var parsedSummary: MeetingSummary? {

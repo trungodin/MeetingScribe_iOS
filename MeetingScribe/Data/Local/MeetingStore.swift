@@ -75,6 +75,37 @@ public class MeetingStore: ObservableObject {
         if let idx = meetings.firstIndex(where: { $0.id == id }) {
             meetings[idx].transcript = transcript
             meetings[idx].status = status ?? .transcribed
+            // Đã xong (hoặc người dùng sửa tay) → bỏ mốc tiến trình từng đoạn
+            meetings[idx].transcribedChunkCount = nil
+            meetings[idx].transcribedChunkTotal = nil
+            saveMeetings()
+        }
+    }
+
+    /// Lưu tiến trình ngay sau mỗi đoạn audio đã nhận dạng xong.
+    /// Nhờ vậy lỗi mạng ở đoạn sau không làm mất công các đoạn trước: lần chạy sau chỉ cần
+    /// nhận dạng tiếp các đoạn còn lại. Trạng thái giữ nguyên `.transcribing`.
+    public func saveTranscriptionProgress(id: Int64, transcript: String, completedChunks: Int, totalChunks: Int) {
+        if let idx = meetings.firstIndex(where: { $0.id == id }) {
+            meetings[idx].transcript = transcript
+            meetings[idx].transcribedChunkCount = completedChunks
+            meetings[idx].transcribedChunkTotal = totalChunks
+            meetings[idx].status = .transcribing
+            saveMeetings()
+        }
+    }
+
+    /// Kết thúc phiên chuyển văn bản bị huỷ/lỗi: suy ra trạng thái từ dữ liệu đang có
+    /// (giữ nguyên số đoạn đã xong để lần sau chạy tiếp, không kẹt ở "Đang chuyển văn bản...").
+    public func settleTranscription(id: Int64) {
+        if let idx = meetings.firstIndex(where: { $0.id == id }) {
+            if !meetings[idx].summaryJson.isEmpty {
+                meetings[idx].status = .summarized
+            } else if !meetings[idx].transcript.isEmpty {
+                meetings[idx].status = .transcribed
+            } else {
+                meetings[idx].status = .recorded
+            }
             saveMeetings()
         }
     }

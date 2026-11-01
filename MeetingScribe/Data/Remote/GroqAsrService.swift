@@ -91,8 +91,55 @@ public class GroqAsrService {
             }
             throw NSError(domain: "GroqAsrService", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không phân tích được phản hồi JSON từ Groq"])
         } else {
-            let errorMsg = String(data: data, encoding: .utf8) ?? "Lỗi \(httpResponse.statusCode)"
-            throw NSError(domain: "GroqAsrService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Groq ASR thất bại: \(errorMsg)"])
+            throw Self.friendlyError(statusCode: httpResponse.statusCode, data: data)
+        }
+    }
+
+    // MARK: - Thông báo lỗi thân thiện
+
+    /// Chuyển lỗi HTTP của Groq thành câu tiếng Việt có hành động cụ thể.
+    /// Groq trả `{"error":{"message":"..."}}` bằng tiếng Anh nên không hiện trực tiếp cho người dùng.
+    static func friendlyError(statusCode: Int, data: Data) -> NSError {
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        var detail = raw
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = root["error"] as? [String: Any],
+           let message = error["message"] as? String {
+            detail = message
+        }
+        let short = detail.count > 200 ? String(detail.prefix(200)) + "…" : detail
+
+        switch statusCode {
+        case 401, 403:
+            return NSError(
+                domain: "GroqAsrService",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Groq từ chối API Key (HTTP \(statusCode)).\nVào Cài đặt ➔ Groq API Key để dán key mới (lấy tại console.groq.com/keys) rồi bấm Lưu."]
+            )
+        case 413:
+            return NSError(
+                domain: "GroqAsrService",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "File gửi lên vượt giới hạn 25MB của Groq. Hãy dùng file ghi âm của app (app tự cắt thành đoạn nhỏ) thay vì file nhập từ ngoài có dung lượng lớn."]
+            )
+        case 429:
+            return NSError(
+                domain: "GroqAsrService",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Groq đang giới hạn tần suất (HTTP 429). Chờ khoảng 30–60 giây rồi bấm chạy lại — các đoạn đã nhận dạng được giữ nguyên, không phải làm lại từ đầu."]
+            )
+        case 500...599:
+            return NSError(
+                domain: "GroqAsrService",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Máy chủ Groq đang gặp sự cố (HTTP \(statusCode)). Vui lòng thử lại sau ít phút."]
+            )
+        default:
+            return NSError(
+                domain: "GroqAsrService",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Groq ASR lỗi \(statusCode): \(short)"]
+            )
         }
     }
 }

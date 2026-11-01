@@ -97,8 +97,54 @@ public class DeepSeekSummarizerService {
             }
             throw NSError(domain: "DeepSeek", code: -2, userInfo: [NSLocalizedDescriptionKey: "Phản hồi DeepSeek không đúng định dạng"])
         } else {
-            let errorMsg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
-            throw NSError(domain: "DeepSeek", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "DeepSeek thất bại: \(errorMsg)"])
+            throw Self.friendlyError(statusCode: httpResponse.statusCode, data: data)
+        }
+    }
+
+    // MARK: - Thông báo lỗi thân thiện
+
+    /// DeepSeek trả lỗi tiếng Anh trong JSON → đổi sang câu tiếng Việt có hành động cụ thể.
+    static func friendlyError(statusCode: Int, data: Data) -> NSError {
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        var detail = raw
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = root["error"] as? [String: Any],
+           let message = error["message"] as? String {
+            detail = message
+        }
+        let short = detail.count > 200 ? String(detail.prefix(200)) + "…" : detail
+
+        switch statusCode {
+        case 401, 403:
+            return NSError(
+                domain: "DeepSeek",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "DeepSeek từ chối API Key (HTTP \(statusCode)).\nVào Cài đặt ➔ DeepSeek API Key để dán key mới (lấy tại platform.deepseek.com/api_keys) rồi bấm Lưu."]
+            )
+        case 402:
+            return NSError(
+                domain: "DeepSeek",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Tài khoản DeepSeek đã hết số dư (HTTP 402). Nạp thêm hoặc chuyển sang Google Gemini trong Cài đặt."]
+            )
+        case 429:
+            return NSError(
+                domain: "DeepSeek",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "DeepSeek đang giới hạn tần suất (HTTP 429). Chờ khoảng 30–60 giây rồi bấm tóm tắt lại."]
+            )
+        case 500...599:
+            return NSError(
+                domain: "DeepSeek",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Máy chủ DeepSeek đang gặp sự cố (HTTP \(statusCode)). Vui lòng thử lại sau ít phút."]
+            )
+        default:
+            return NSError(
+                domain: "DeepSeek",
+                code: statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "DeepSeek lỗi \(statusCode): \(short)"]
+            )
         }
     }
 

@@ -202,6 +202,10 @@ public struct DetailView: View {
                     processingCard
                 }
 
+                if let state = meeting.resumableTranscription, !isProcessing {
+                    resumeBanner(completed: state.completedChunks, total: state.totalChunks)
+                }
+
                 if meeting.transcript.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "waveform.badge.magnifyingglass")
@@ -242,7 +246,9 @@ public struct DetailView: View {
                                 .disabled(isProcessing)
                         }
 
-                        Button("Chuyển lại", action: startTranscribe)
+                        Button(action: startTranscribe) {
+                            Text(Self.transcribeButtonTitle(for: meeting))
+                        }
                             .font(.caption)
                             .disabled(isProcessing)
                     }
@@ -855,7 +861,8 @@ public struct DetailView: View {
         // Xin iOS thêm thời gian chạy nền để job không chết khi người dùng chuyển sang app khác
         beginProcessingBackgroundTask()
 
-        let previousStatus = Self.idleStatus(for: m)
+        // Lần trước có thể đã nhận dạng xong vài đoạn (lỗi mạng giữa chừng) → chỉ làm tiếp phần còn lại
+        let resumeState = m.resumableTranscription
 
         processingTask = Task {
             do {
@@ -898,6 +905,7 @@ public struct DetailView: View {
                 // ~18MB của Gemini và tránh nạp cả file ghi âm vào RAM.
                 let outcome = try await ChunkedTranscriber.shared.transcribe(
                     audioFileURL: audioURL,
+                    resume: resumeState,
                     onStatus: { message in
                         DispatchQueue.main.async {
                             statusMessage = message
@@ -908,6 +916,17 @@ public struct DetailView: View {
                         DispatchQueue.main.async {
                             progressPercent = max(5, min(99, percent))
                             lastProgressAt = Date()
+                        }
+                    },
+                    onChunkCompleted: { completed, total, textSoFar in
+                        // Lưu ngay xuống DB: lỗi/huỷ ở đoạn sau vẫn giữ được các đoạn đã nhận dạng
+                        DispatchQueue.main.async {
+                            store.saveTranscriptionProgress(
+                                id: m.id,
+                                transcript: textSoFar,
+                                completedChunks: completed,
+                                totalChunks: total
+                            )
                         }
                     },
                     transcribeChunk: transcribeOneChunk
@@ -930,24 +949,27 @@ public struct DetailView: View {
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    // Huỷ giữa chừng: trả item về trạng thái trước đó, không để kẹt "Đang chuyển văn bản..."
-                    store.updateStatus(id: m.id, status: previousStatus)
+                    // Huỷ giữa chừng: các đoạn đã xong vẫn được giữ để chạy tiếp;
+                    // trạng thái suy ra từ dữ liệu hiện có (không kẹt "Đang chuyển văn bản...")
+                    store.settleTranscription(id: m.id)
                     loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     progressPercent = 0
-                    statusMessage = "Đã huỷ."
+                    statusMessage = "Đã huỷ." + Self.savedChunkInfo(store.meetings.first { $0.id == m.id })
                     endProcessingBackgroundTask()
                 }
             } catch {
                 await MainActor.run {
-                    store.updateStatus(id: m.id, status: previousStatus)
+                    store.settleTranscription(id: m.id)
                     loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
-                    errorMessage = error.localizedDescription
+                    // Câu lỗi tiếng Việt đã phân loại + nhắc các đoạn đã lưu (nếu có)
+                    errorMessage = AiFailureClassifier.message(for: error)
+                        + Self.savedChunkInfo(store.meetings.first { $0.id == m.id })
                     endProcessingBackgroundTask()
                 }
             }
@@ -1032,7 +1054,8 @@ public struct DetailView: View {
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
-                    errorMessage = error.localizedDescription
+                    // Câu lỗi tiếng Việt đã phân loại (key sai, hết quota, mất mạng...)
+                    errorMessage = AiFailureClassifier.message(for: error)
                     endProcessingBackgroundTask()
                 }
             }
@@ -1047,6 +1070,40 @@ public struct DetailView: View {
             return meeting.exportFilePath.isEmpty ? .summarized : .exported
         }
         return meeting.transcript.isEmpty ? .recorded : .transcribed
+    }
+
+    /// Nhắc người dùng còn bao nhiêu đoạn đã lưu được, nếu lần chạy bị dừng giữa chừng.
+    /// Chuỗi rỗng khi không có tiến trình dở dang.
+    static func savedChunkInfo(_ meeting: Meeting?) -> String {
+        guard let meeting,
+              let done = meeting.transcribedChunkCount,
+              let total = meeting.transcribedChunkTotal,
+              done > 0, total > done else {
+            return ""
+        }
+        return " Đã lưu \(done)/\(total) đoạn — bấm chạy lại để làm tiếp từ đoạn \(done + 1)."
+    }
+
+    /// Tiêu đề nút chạy ASR: có tiến trình dở dang thì nói rõ là chạy tiếp đoạn còn lại
+    static func transcribeButtonTitle(for meeting: Meeting) -> String {
+        guard let state = meeting.resumableTranscription else { return "Chuyển lại" }
+        return "Chạy tiếp (\(state.completedChunks)/\(state.totalChunks))"
+    }
+
+    /// Nhắc người dùng còn đoạn chưa nhận dạng xong (lần trước lỗi mạng giữa chừng)
+    private func resumeBanner(completed: Int, total: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.clockwise.circle.fill")
+                .foregroundColor(.orange)
+            Text("Đã nhận dạng \(completed)/\(total) đoạn. Bấm \"Chạy tiếp\" để làm nốt \(total - completed) đoạn còn lại — phần đã có không bị mất.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(8)
     }
 
     /// Xin iOS thêm thời gian chạy nền: nếu người dùng chuyển app/khoá máy giữa lúc AI đang xử lý,
