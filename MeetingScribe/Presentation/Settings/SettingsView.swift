@@ -37,6 +37,21 @@ public struct SettingsView: View {
 
     @State private var savedAlert = false
 
+    // Dung lượng & dọn dẹp
+    @State private var usage = StorageUsage()
+    @State private var exportedCleanup = CleanupTarget()
+    @State private var oldCleanup = CleanupTarget()
+    @State private var cleanupMessage: String?
+    @State private var showCleanupExportedConfirm = false
+    @State private var showCleanupOldConfirm = false
+
+    /// Tập cuộc họp sẽ dọn audio (id + tổng dung lượng) để hiện trên nút và hộp xác nhận
+    struct CleanupTarget: Equatable {
+        var ids: [Int64] = []
+        var bytes: Int64 = 0
+        var count: Int { ids.count }
+    }
+
     public init() {}
 
     public var body: some View {
@@ -200,6 +215,46 @@ public struct SettingsView: View {
                         TextField("VD: Trần Thị B - Thư ký", text: $defaultSecretary)
                     }
                 }
+
+                // MARK: 5. Dung lượng & dọn dẹp
+                Section(header: Label("Dung lượng bộ nhớ", systemImage: "internaldrive")) {
+                    LabeledContent("File ghi âm") {
+                        Text("\(StorageUsage.format(usage.audioBytes)) · \(usage.audioFileCount) file")
+                            .foregroundColor(.secondary)
+                    }
+                    LabeledContent("Biên bản Word") {
+                        Text(StorageUsage.format(usage.exportBytes))
+                            .foregroundColor(.secondary)
+                    }
+                    LabeledContent("Tổng cộng") {
+                        Text(StorageUsage.format(usage.totalBytes))
+                            .fontWeight(.semibold)
+                    }
+
+                    Button {
+                        showCleanupExportedConfirm = true
+                    } label: {
+                        Label("Xoá audio của cuộc họp đã có biên bản (\(exportedCleanup.count))", systemImage: "trash")
+                    }
+                    .disabled(exportedCleanup.count == 0)
+
+                    Button {
+                        showCleanupOldConfirm = true
+                    } label: {
+                        Label("Xoá audio cũ hơn 30 ngày (\(oldCleanup.count))", systemImage: "clock.arrow.circlepath")
+                    }
+                    .disabled(oldCleanup.count == 0)
+
+                    if let cleanupMessage {
+                        Text(cleanupMessage)
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+
+                    Text("Xoá audio chỉ giải phóng dung lượng: văn bản và biên bản Word vẫn giữ nguyên. File chưa có văn bản sẽ không bị xoá.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
             .navigationTitle("Cài đặt hệ thống")
             .navigationBarTitleDisplayMode(.inline)
@@ -217,8 +272,33 @@ public struct SettingsView: View {
             } message: {
                 Text("Tất cả cấu hình và API Key đã được bảo vệ trong iOS Keychain.")
             }
+            .confirmationDialog(
+                "Xoá file ghi âm của \(exportedCleanup.count) cuộc họp?",
+                isPresented: $showCleanupExportedConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Xoá audio, giữ biên bản", role: .destructive) {
+                    deleteAudio(for: exportedCleanup.ids)
+                }
+                Button("Huỷ", role: .cancel) {}
+            } message: {
+                Text("Giải phóng khoảng \(StorageUsage.format(exportedCleanup.bytes)). Văn bản và biên bản Word vẫn xem lại được.")
+            }
+            .confirmationDialog(
+                "Xoá audio cũ hơn 30 ngày của \(oldCleanup.count) cuộc họp?",
+                isPresented: $showCleanupOldConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Xoá audio cũ", role: .destructive) {
+                    deleteAudio(for: oldCleanup.ids)
+                }
+                Button("Huỷ", role: .cancel) {}
+            } message: {
+                Text("Giải phóng khoảng \(StorageUsage.format(oldCleanup.bytes)). Văn bản và biên bản Word vẫn xem lại được.")
+            }
             .onAppear {
                 loadSettings()
+                refreshStorage()
             }
         }
     }
@@ -258,5 +338,31 @@ public struct SettingsView: View {
         KeychainManager.shared.save(key: .defaultSecretary, value: defaultSecretary)
 
         savedAlert = true
+    }
+
+    // MARK: - Dung lượng
+
+    /// Đo lại dung lượng và danh sách có thể dọn (gọi khi mở Cài đặt và sau mỗi lần xoá)
+    private func refreshStorage() {
+        let store = MeetingStore.shared
+        usage = store.storageUsage()
+
+        func target(olderThanDays days: Int?) -> CleanupTarget {
+            let items = store.cleanableAudio(olderThanDays: days)
+            return CleanupTarget(
+                ids: items.map { $0.meeting.id },
+                bytes: items.reduce(Int64(0)) { $0 + $1.bytes }
+            )
+        }
+
+        exportedCleanup = target(olderThanDays: nil)
+        oldCleanup = target(olderThanDays: 30)
+    }
+
+    private func deleteAudio(for ids: [Int64]) {
+        guard !ids.isEmpty else { return }
+        let freed = MeetingStore.shared.deleteAudioFiles(meetingIds: Set(ids))
+        cleanupMessage = "Đã xoá audio của \(ids.count) cuộc họp, giải phóng \(StorageUsage.format(freed))."
+        refreshStorage()
     }
 }

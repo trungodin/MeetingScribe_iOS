@@ -169,6 +169,76 @@ public class MeetingStore: ObservableObject {
             saveMeetings()
         }
     }
+    // MARK: - Dung lượng & dọn dẹp
+
+    /// Dung lượng file ghi âm + biên bản Word đang chiếm trên máy (để người dùng biết vì sao máy đầy).
+    public func storageUsage() -> StorageUsage {
+        var audioBytes: Int64 = 0
+        var exportBytes: Int64 = 0
+        var audioFileCount = 0
+
+        for meeting in meetings {
+            if let audioURL = meeting.resolvedAudioURL {
+                audioBytes += Self.fileSize(at: audioURL)
+                audioFileCount += 1
+            }
+            if let exportURL = meeting.resolvedExportURL {
+                exportBytes += Self.fileSize(at: exportURL)
+            }
+        }
+
+        return StorageUsage(audioBytes: audioBytes, exportBytes: exportBytes, audioFileCount: audioFileCount)
+    }
+
+    /// Các file ghi âm có thể xoá mà KHÔNG mất nội dung: cuộc họp đã có văn bản/biên bản
+    /// và (đã tóm tắt xong hoặc cũ hơn `olderThanDays` ngày).
+    /// Cố tình bỏ qua file chưa có văn bản — xoá sẽ mất luôn bản ghi âm duy nhất.
+    public func cleanableAudio(olderThanDays days: Int? = nil) -> [(meeting: Meeting, bytes: Int64)] {
+        let threshold = days.map { Date().addingTimeInterval(-Double($0) * 86_400) }
+
+        return meetings.compactMap { meeting -> (Meeting, Int64)? in
+            guard let audioURL = meeting.resolvedAudioURL else { return nil }
+            let hasText = !meeting.transcript.isEmpty || !meeting.summaryJson.isEmpty
+            guard hasText else { return nil }
+
+            let isFinished = !meeting.summaryJson.isEmpty
+            let isOld = threshold.map {
+                Date(timeIntervalSince1970: Double(meeting.createdAt) / 1000) < $0
+            } ?? false
+            guard isFinished || isOld else { return nil }
+
+            return (meeting, Self.fileSize(at: audioURL))
+        }
+    }
+
+    /// Xoá file ghi âm của các cuộc họp, giữ nguyên văn bản + biên bản Word.
+    /// Trả về số byte đã giải phóng để UI báo lại cho người dùng.
+    @discardableResult
+    public func deleteAudioFiles(meetingIds: Set<Int64>) -> Int64 {
+        var freed: Int64 = 0
+        var changed = false
+
+        for idx in meetings.indices where meetingIds.contains(meetings[idx].id) {
+            guard let audioURL = meetings[idx].resolvedAudioURL else { continue }
+            freed += Self.fileSize(at: audioURL)
+            try? FileManager.default.removeItem(at: audioURL)
+            // Xoá đường dẫn để UI biết audio không còn (nội dung văn bản vẫn nguyên)
+            meetings[idx].audioFilePath = ""
+            changed = true
+        }
+
+        if changed {
+            saveMeetings()
+        }
+        return freed
+    }
+
+    static func fileSize(at url: URL) -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+
 
     public func getMeeting(id: Int64) -> Meeting? {
         return meetings.first { $0.id == id }

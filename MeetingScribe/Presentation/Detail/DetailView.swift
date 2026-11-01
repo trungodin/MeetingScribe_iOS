@@ -127,70 +127,88 @@ public struct DetailView: View {
 
     // MARK: - 1. Audio Player Card (Seekbar + Tua lùi / tới 5s)
 
+    @ViewBuilder
     private func audioPlayerCard(meeting: Meeting) -> some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text(formatDuration(playbackPosition))
+        // Audio đã bị xoá để giải phóng dung lượng (Cài đặt ➔ Dung lượng) → báo rõ thay vì hiện điều khiển chết
+        if meeting.resolvedAudioURL == nil {
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.slash")
+                    .foregroundColor(.secondary)
+                Text(meeting.durationMs > 0
+                     ? "File ghi âm (\(meeting.formattedDuration)) đã được xoá để tiết kiệm dung lượng. Văn bản và biên bản vẫn giữ nguyên."
+                     : "Không tìm thấy file ghi âm trên thiết bị này.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Spacer()
-
-                // Nút chia sẻ file ghi âm gốc
-                Button(action: shareAudioFile) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Xuất audio")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                }
-
-                Spacer()
-                Text(formatDuration(totalDuration > 0 ? totalDuration : Double(meeting.durationMs) / 1000))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-
-            // Thanh tua thời gian Seekbar
-            Slider(value: Binding(
-                get: { playbackPosition },
-                set: { newVal in
-                    playbackPosition = newVal
-                    if audioPlayer == nil {
-                        setupAudioPlayer()
-                    }
-                    audioPlayer?.currentTime = newVal
-                }
-            ), in: 0...max(1, totalDuration > 0 ? totalDuration : 1))
-
-            HStack(spacing: 32) {
-                // Tua lùi 5s
-                Button(action: { seekBy(-5) }) {
-                    Image(systemName: "gobackward.5")
-                        .font(.title2)
-                        .foregroundColor(.primary)
-                }
-
-                // Phát / Dừng
-                Button(action: togglePlayAudio) {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 48))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        } else {
+            VStack(spacing: 8) {
+                HStack {
+                    Text(formatDuration(playbackPosition))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+    
+                    // Nút chia sẻ file ghi âm gốc
+                    Button(action: shareAudioFile) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Xuất audio")
+                        }
+                        .font(.caption)
                         .foregroundColor(.blue)
+                    }
+    
+                    Spacer()
+                    Text(formatDuration(totalDuration > 0 ? totalDuration : Double(meeting.durationMs) / 1000))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-
-                // Tua tới 5s
-                Button(action: { seekBy(5) }) {
-                    Image(systemName: "goforward.5")
-                        .font(.title2)
-                        .foregroundColor(.primary)
+    
+                // Thanh tua thời gian Seekbar
+                Slider(value: Binding(
+                    get: { playbackPosition },
+                    set: { newVal in
+                        playbackPosition = newVal
+                        if audioPlayer == nil {
+                            setupAudioPlayer()
+                        }
+                        audioPlayer?.currentTime = newVal
+                    }
+                ), in: 0...max(1, totalDuration > 0 ? totalDuration : 1))
+    
+                HStack(spacing: 32) {
+                    // Tua lùi 5s
+                    Button(action: { seekBy(-5) }) {
+                        Image(systemName: "gobackward.5")
+                            .font(.title2)
+                            .foregroundColor(.primary)
+                    }
+    
+                    // Phát / Dừng
+                    Button(action: togglePlayAudio) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.blue)
+                    }
+    
+                    // Tua tới 5s
+                    Button(action: { seekBy(5) }) {
+                        Image(systemName: "goforward.5")
+                            .font(.title2)
+                            .foregroundColor(.primary)
+                    }
                 }
             }
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(12)
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
     }
 
     // MARK: - 2. Tab Transcript
@@ -229,6 +247,9 @@ public struct DetailView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                         }
+                        // Audio đã bị xoá thì không thể nhận dạng lại
+                        .disabled(meeting.resolvedAudioURL == nil)
+                        .opacity(meeting.resolvedAudioURL == nil ? 0.4 : 1)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
@@ -250,7 +271,8 @@ public struct DetailView: View {
                             Text(Self.transcribeButtonTitle(for: meeting))
                         }
                             .font(.caption)
-                            .disabled(isProcessing)
+                            // Audio đã bị xoá (dọn dung lượng) thì không nhận dạng lại được
+                            .disabled(isProcessing || meeting.resolvedAudioURL == nil)
                     }
 
                     if isEditingTranscript {
