@@ -31,7 +31,7 @@ public class GeminiService {
 
         // Gemini nhận audio dạng inline base64 => toàn bộ request phải < ~20MB.
         if audioData.count > 18 * 1024 * 1024 {
-            throw NSError(domain: "GeminiService", code: 413, userInfo: [NSLocalizedDescriptionKey: "File ghi âm quá lớn để gửi trực tiếp cho Gemini (tối đa ~18MB). Vui lòng dùng Groq Whisper hoặc Whisper Offline cho file dài."])
+            throw NSError(domain: "GeminiService", code: 413, userInfo: [NSLocalizedDescriptionKey: "File ghi âm quá lớn để gửi trực tiếp cho Gemini (tối đa ~18MB). Vui lòng chọn Groq Whisper large-v3-turbo trong Cài đặt để chuyển văn bản cho file dài."])
         }
 
         let base64Audio = audioData.base64EncodedString()
