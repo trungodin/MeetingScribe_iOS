@@ -393,6 +393,10 @@ public struct SettingsView: View {
         guard !ids.isEmpty else { return }
         let freed = MeetingStore.shared.deleteAudioFiles(meetingIds: Set(ids))
         cleanupMessage = "Đã xoá audio của \(ids.count) cuộc họp, giải phóng \(StorageUsage.format(freed))."
+        AppLog.info(
+            "Dọn audio \(ids.count) cuộc họp, giải phóng \(StorageUsage.format(freed))",
+            .store
+        )
         refreshStorage()
     }
 }
