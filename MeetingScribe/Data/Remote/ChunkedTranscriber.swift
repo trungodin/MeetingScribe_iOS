@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import os
 
 /// Lỗi cuối cùng của một phiên chuyển văn bản: đã phân loại + biết đã lưu được bao nhiêu đoạn
 public struct TranscriptionError: LocalizedError {
@@ -78,6 +79,13 @@ public final class ChunkedTranscriber {
 
     private init() {}
 
+    /// Mốc thời gian cho Instruments: mỗi đoạn audio là một interval, cả phiên là một interval cha.
+    /// Mở Instruments ➔ os_signpost, lọc subsystem này để biết đoạn nào chậm.
+    private static let signposter = OSSignposter(
+        subsystem: "com.example.meetingscribe",
+        category: "transcribe"
+    )
+
     /// - Parameters:
     ///   - resume: tiến trình của lần chạy trước (nil = làm mới từ đầu)
     ///   - retryPolicy: số lần thử và khoảng chờ khi gặp lỗi tạm thời
@@ -101,6 +109,10 @@ public final class ChunkedTranscriber {
         defer { AudioChunker.shared.cleanup(chunks) }
 
         let total = chunks.count
+
+        // Đo cả phiên (bao gồm cắt file + chờ mạng) để so sánh với tổng thời gian từng đoạn
+        let runState = Self.signposter.beginInterval("transcribe", id: Self.signposter.makeSignpostID())
+        defer { Self.signposter.endInterval("transcribe", runState) }
 
         if total == 1 {
             onStatus("Đang gửi file ghi âm lên máy chủ...")
@@ -146,6 +158,14 @@ public final class ChunkedTranscriber {
         for index in startIndex..<total {
             try Task.checkCancellation()
             let chunk = chunks[index]
+
+            // Mỗi đoạn một interval riêng: biết ngay đoạn nào tốn thời gian nhất
+            let chunkState = Self.signposter.beginInterval(
+                "chunk",
+                id: Self.signposter.makeSignpostID(),
+                "\(index + 1)/\(total)"
+            )
+            defer { Self.signposter.endInterval("chunk", chunkState) }
 
             onStatus("File dài chia \(total) đoạn · đoạn \(index + 1)/\(total) đang gửi...")
             let part = try await attempt(
