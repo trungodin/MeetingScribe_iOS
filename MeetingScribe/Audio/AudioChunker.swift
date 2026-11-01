@@ -16,11 +16,14 @@ public struct AudioChunk {
     public let url: URL
     /// Đoạn do app cắt ra (file tạm) → phải xoá sau khi dùng xong
     public let isTemporary: Bool
+    /// Đoạn này bắt đầu ở giây thứ bao nhiêu của file gốc (để cộng bù mốc thời gian khi ghép transcript)
+    public let startSeconds: Double
 
-    public init(index: Int, url: URL, isTemporary: Bool) {
+    public init(index: Int, url: URL, isTemporary: Bool, startSeconds: Double = 0) {
         self.index = index
         self.url = url
         self.isTemporary = isTemporary
+        self.startSeconds = startSeconds
     }
 }
 
@@ -88,7 +91,7 @@ public final class AudioChunker {
             let outputURL = directory.appendingPathComponent(String(format: "chunk_%03d.m4a", index))
             try await export(asset: asset, timeRange: range, to: outputURL)
 
-            chunks.append(AudioChunk(index: index, url: outputURL, isTemporary: true))
+            chunks.append(AudioChunk(index: index, url: outputURL, isTemporary: true, startSeconds: start))
             index += 1
             start += length
         }

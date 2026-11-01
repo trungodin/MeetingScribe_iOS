@@ -302,6 +302,9 @@ public struct DetailView: View {
                                     .cornerRadius(8)
                             }
                         }
+                    } else if let segments = meeting.segments, !segments.isEmpty {
+                        // Có mốc thời gian từng câu: bấm vào mốc là nghe lại đúng chỗ đó
+                        transcriptSegmentsView(segments: segments, canSeek: meeting.resolvedAudioURL != nil)
                     } else {
                         Text(meeting.transcript)
                             .font(.body)
@@ -311,6 +314,47 @@ public struct DetailView: View {
                 }
             }
             .padding(16)
+        }
+    }
+
+    /// Danh sách câu kèm mốc thời gian. Bấm vào mốc để tua audio tới đúng câu đó —
+    /// cần thiết với cuộc họp dài, thay vì tua mò để tìm lại một ý.
+    private func transcriptSegmentsView(segments: [TranscriptSegment], canSeek: Bool) -> some View {
+        let activeIndex = TranscriptSegment.index(at: playbackPosition, in: segments)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                HStack(alignment: .top, spacing: 10) {
+                    Button {
+                        seek(to: Double(segment.startMs) / 1000.0, autoplay: true)
+                    } label: {
+                        Text(segment.startLabel)
+                            .font(.caption.monospacedDigit())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.12))
+                            .foregroundColor(.blue)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSeek)
+
+                    Text(segment.text)
+                        .font(.body)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(6)
+                .background(index == activeIndex ? Color.blue.opacity(0.10) : Color.clear)
+                .cornerRadius(6)
+            }
+
+            if !canSeek {
+                Text("Không tua được vì file ghi âm đã được xoá để tiết kiệm dung lượng.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -789,6 +833,22 @@ public struct DetailView: View {
         playbackPosition = target
     }
 
+    /// Tua tới đúng mốc thời gian của một câu trong transcript và phát tiếp từ đó.
+    private func seek(to seconds: Double, autoplay: Bool) {
+        if audioPlayer == nil {
+            setupAudioPlayer()
+        }
+        guard let player = audioPlayer else { return }
+
+        let target = max(0, min(max(0, player.duration - 0.1), seconds))
+        player.currentTime = target
+        playbackPosition = target
+
+        if autoplay && !isPlaying {
+            togglePlayAudio()
+        }
+    }
+
     private func stopAudio() {
         audioPlayer?.stop()
         audioPlayer = nil
@@ -889,7 +949,7 @@ public struct DetailView: View {
         processingTask = Task {
             do {
                 // Engine chọn 1 lần, dùng chung cho mọi đoạn
-                let transcribeOneChunk: (URL, @escaping (Int) -> Void) async throws -> String = { chunkURL, onChunkProgress in
+                let transcribeOneChunk: (URL, @escaping (Int) -> Void) async throws -> TranscribedChunk = { chunkURL, onChunkProgress in
                     if engine == "GEMINI" {
                         let key = KeychainManager.shared.get(key: .geminiApiKey)
                         let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
@@ -940,12 +1000,13 @@ public struct DetailView: View {
                             lastProgressAt = Date()
                         }
                     },
-                    onChunkCompleted: { completed, total, textSoFar in
+                    onChunkCompleted: { completed, total, textSoFar, chunkSegments in
                         // Lưu ngay xuống DB: lỗi/huỷ ở đoạn sau vẫn giữ được các đoạn đã nhận dạng
                         DispatchQueue.main.async {
                             store.saveTranscriptionProgress(
                                 id: m.id,
                                 transcript: textSoFar,
+                                segments: chunkSegments,
                                 completedChunks: completed,
                                 totalChunks: total
                             )
@@ -958,7 +1019,11 @@ public struct DetailView: View {
                     let finalTranscript = outcome.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? "(Không nhận diện được giọng nói trong đoạn ghi âm này)"
                         : outcome.text
-                    store.updateTranscript(id: m.id, transcript: finalTranscript)
+                    store.updateTranscript(
+                        id: m.id,
+                        transcript: finalTranscript,
+                        segments: outcome.segments.isEmpty ? nil : outcome.segments
+                    )
                     loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil

@@ -71,9 +71,16 @@ public class MeetingStore: ObservableObject {
 
     /// Cập nhật văn bản. `status` = nil → đánh dấu "đã chuyển văn bản";
     /// truyền status hiện tại khi người dùng chỉ sửa lỗi nhận dạng để không mất mốc "đã tóm tắt".
-    public func updateTranscript(id: Int64, transcript: String, status: MeetingStatus? = nil) {
+    /// `segments` = nil khi người dùng sửa tay (văn bản không còn khớp mốc thời gian nữa).
+    public func updateTranscript(
+        id: Int64,
+        transcript: String,
+        segments: [TranscriptSegment]? = nil,
+        status: MeetingStatus? = nil
+    ) {
         if let idx = meetings.firstIndex(where: { $0.id == id }) {
             meetings[idx].transcript = transcript
+            meetings[idx].segments = segments
             meetings[idx].status = status ?? .transcribed
             // Đã xong (hoặc người dùng sửa tay) → bỏ mốc tiến trình từng đoạn
             meetings[idx].transcribedChunkCount = nil
@@ -85,9 +92,16 @@ public class MeetingStore: ObservableObject {
     /// Lưu tiến trình ngay sau mỗi đoạn audio đã nhận dạng xong.
     /// Nhờ vậy lỗi mạng ở đoạn sau không làm mất công các đoạn trước: lần chạy sau chỉ cần
     /// nhận dạng tiếp các đoạn còn lại. Trạng thái giữ nguyên `.transcribing`.
-    public func saveTranscriptionProgress(id: Int64, transcript: String, completedChunks: Int, totalChunks: Int) {
+    public func saveTranscriptionProgress(
+        id: Int64,
+        transcript: String,
+        segments: [TranscriptSegment],
+        completedChunks: Int,
+        totalChunks: Int
+    ) {
         if let idx = meetings.firstIndex(where: { $0.id == id }) {
             meetings[idx].transcript = transcript
+            meetings[idx].segments = segments.isEmpty ? nil : segments
             meetings[idx].transcribedChunkCount = completedChunks
             meetings[idx].transcribedChunkTotal = totalChunks
             meetings[idx].status = .transcribing

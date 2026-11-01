@@ -12,7 +12,7 @@ public class GroqAsrService {
 
     private init() {}
 
-    public func transcribe(audioFileURL: URL, apiKey: String, onProgress: ((Int) -> Void)? = nil) async throws -> String {
+    public func transcribe(audioFileURL: URL, apiKey: String, onProgress: ((Int) -> Void)? = nil) async throws -> TranscribedChunk {
         guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
             throw NSError(domain: "GroqAsrService", code: 404, userInfo: [NSLocalizedDescriptionKey: "File âm thanh không tồn tại"])
         }
@@ -50,10 +50,10 @@ public class GroqAsrService {
         body.appendString("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
         body.appendString("vi\r\n")
 
-        // 3. response_format
+        // 3. response_format: verbose_json để Groq trả kèm "segments" (mốc thời gian từng câu)
         body.appendString("--\(boundary)\r\n")
         body.appendString("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
-        body.appendString("json\r\n")
+        body.appendString("verbose_json\r\n")
 
         // 4. temperature
         body.appendString("--\(boundary)\r\n")
@@ -87,11 +87,36 @@ public class GroqAsrService {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let text = json["text"] as? String {
                 onProgress?(100)
-                return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return TranscribedChunk(
+                    text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    segments: Self.parseSegments(json["segments"])
+                )
             }
             throw NSError(domain: "GroqAsrService", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không phân tích được phản hồi JSON từ Groq"])
         } else {
             throw Self.friendlyError(statusCode: httpResponse.statusCode, data: data)
+        }
+    }
+
+    /// Đọc `segments` của verbose_json → mốc thời gian từng câu (Groq trả giây, ta lưu mili giây).
+    /// Không có segments (model/định dạng không hỗ trợ) thì trả mảng rỗng — transcript vẫn dùng bình thường.
+    static func parseSegments(_ raw: Any?) -> [TranscriptSegment] {
+        guard let list = raw as? [[String: Any]] else { return [] }
+
+        return list.compactMap { item in
+            guard let start = (item["start"] as? NSNumber)?.doubleValue,
+                  let end = (item["end"] as? NSNumber)?.doubleValue,
+                  let text = item["text"] as? String else {
+                return nil
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            return TranscriptSegment(
+                startMs: Int64((start * 1000).rounded()),
+                endMs: Int64((end * 1000).rounded()),
+                text: trimmed
+            )
         }
     }
 

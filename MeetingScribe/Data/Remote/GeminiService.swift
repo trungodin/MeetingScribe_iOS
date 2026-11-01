@@ -15,7 +15,8 @@ public class GeminiService {
 
     // MARK: - ASR (Chuyển giọng nói sang văn bản)
 
-    public func transcribe(audioFileURL: URL, apiKey: String, proxyUrl: String = "", onProgress: ((Int) -> Void)? = nil) async throws -> String {
+    /// Gemini ASR chỉ trả văn bản (không có mốc thời gian) → `segments` rỗng.
+    public func transcribe(audioFileURL: URL, apiKey: String, proxyUrl: String = "", onProgress: ((Int) -> Void)? = nil) async throws -> TranscribedChunk {
         guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
             throw NSError(domain: "GeminiService", code: 404, userInfo: [NSLocalizedDescriptionKey: "File âm thanh không tồn tại"])
         }
@@ -83,7 +84,7 @@ public class GeminiService {
                 onProgress?(50)
                 let text = try await executeGeminiRequest(payload: requestPayload, model: model, apiKey: apiKey, proxyUrl: proxyUrl)
                 onProgress?(100)
-                return text
+                return TranscribedChunk(text: text)
             } catch {
                 lastError = error
                 // Lỗi xác thực/quyền thì thử model khác cũng vô ích => dừng ngay

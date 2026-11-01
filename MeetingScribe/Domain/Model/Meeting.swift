@@ -24,6 +24,10 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
     /// Tổng số đoạn của lần chạy gần nhất, dùng để biết tiến trình cũ còn dùng lại được hay không
     public var transcribedChunkTotal: Int?
 
+    /// Mốc thời gian từng câu (chỉ có khi nhận dạng bằng Groq Whisper).
+    /// Optional để database cũ và các bản ghi chỉ có văn bản thuần vẫn decode được.
+    public var segments: [TranscriptSegment]?
+
     public init(
         id: Int64 = 0,
         title: String,
@@ -35,7 +39,8 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
         status: MeetingStatus = .recorded,
         createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000),
         transcribedChunkCount: Int? = nil,
-        transcribedChunkTotal: Int? = nil
+        transcribedChunkTotal: Int? = nil,
+        segments: [TranscriptSegment]? = nil
     ) {
         self.id = id
         self.title = title
@@ -48,6 +53,7 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
         self.createdAt = createdAt
         self.transcribedChunkCount = transcribedChunkCount
         self.transcribedChunkTotal = transcribedChunkTotal
+        self.segments = segments
     }
 
     /// Tiến trình nhận dạng dở dang còn dùng để chạy tiếp được (đã xong ≥1 đoạn nhưng chưa hết)
@@ -58,7 +64,12 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
               !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
-        return ChunkedTranscriber.ResumeState(completedChunks: done, totalChunks: total, text: transcript)
+        return ChunkedTranscriber.ResumeState(
+            completedChunks: done,
+            totalChunks: total,
+            text: transcript,
+            segments: segments ?? []
+        )
     }
 
     public var parsedSummary: MeetingSummary? {

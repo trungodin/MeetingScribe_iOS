@@ -33,6 +33,14 @@ public final class ChunkedTranscriber {
         public let text: String
         /// Số đoạn đã gửi (1 = file ngắn, không phải cắt)
         public let chunkCount: Int
+        /// Mốc thời gian từng câu đã cộng bù theo vị trí đoạn trong file gốc (rỗng nếu engine không trả về)
+        public let segments: [TranscriptSegment]
+
+        public init(text: String, chunkCount: Int, segments: [TranscriptSegment] = []) {
+            self.text = text
+            self.chunkCount = chunkCount
+            self.segments = segments
+        }
     }
 
     /// Tiến trình của lần chạy trước còn dùng để chạy tiếp được
@@ -43,11 +51,14 @@ public final class ChunkedTranscriber {
         public let totalChunks: Int
         /// Văn bản đã có của các đoạn trước đó
         public let text: String
+        /// Mốc thời gian đã có của các đoạn trước đó
+        public let segments: [TranscriptSegment]
 
-        public init(completedChunks: Int, totalChunks: Int, text: String) {
+        public init(completedChunks: Int, totalChunks: Int, text: String, segments: [TranscriptSegment] = []) {
             self.completedChunks = completedChunks
             self.totalChunks = totalChunks
             self.text = text
+            self.segments = segments
         }
     }
 
@@ -81,8 +92,8 @@ public final class ChunkedTranscriber {
         retryPolicy: RetryPolicy = .default,
         onStatus: @escaping (String) -> Void,
         onProgress: @escaping (Double) -> Void,
-        onChunkCompleted: ((_ completedChunks: Int, _ totalChunks: Int, _ textSoFar: String) -> Void)? = nil,
-        transcribeChunk: @escaping (URL, @escaping (Int) -> Void) async throws -> String
+        onChunkCompleted: ((_ completedChunks: Int, _ totalChunks: Int, _ textSoFar: String, _ segments: [TranscriptSegment]) -> Void)? = nil,
+        transcribeChunk: @escaping (URL, @escaping (Int) -> Void) async throws -> TranscribedChunk
     ) async throws -> Outcome {
 
         let chunks = try await AudioChunker.shared.split(audioFileURL: audioFileURL, chunkSeconds: chunkSeconds)
@@ -93,7 +104,7 @@ public final class ChunkedTranscriber {
 
         if total == 1 {
             onStatus("Đang gửi file ghi âm lên máy chủ...")
-            let text = try await attempt(
+            let result = try await attempt(
                 policy: retryPolicy,
                 makeError: { failure, attempts in
                     TranscriptionError(failure: failure, attempts: attempts, completedChunks: 0, totalChunks: 1)
@@ -108,10 +119,11 @@ public final class ChunkedTranscriber {
                 }
             )
             onProgress(100)
-            return Outcome(text: text, chunkCount: 1)
+            return Outcome(text: result.text, chunkCount: 1, segments: result.segments)
         }
 
         var parts: [String] = []
+        var segments: [TranscriptSegment] = []
         var startIndex = 0
 
         // Chạy tiếp từ đoạn dang dở của lần trước (chỉ khi bố cục đoạn không đổi)
@@ -122,6 +134,7 @@ public final class ChunkedTranscriber {
             let saved = resume.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !saved.isEmpty {
                 parts = [saved]
+                segments = resume.segments
                 startIndex = resume.completedChunks
                 onStatus("Tiếp tục từ đoạn \(startIndex + 1)/\(total) — \(startIndex) đoạn trước đã nhận dạng xong.")
                 onProgress(Double(startIndex) / Double(total) * 100.0)
@@ -157,17 +170,21 @@ public final class ChunkedTranscriber {
                 }
             )
 
-            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = part.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 parts.append(trimmed)
             }
+            // Mốc thời gian của đoạn này được cộng bù vị trí bắt đầu của nó trong file gốc
+            let offsetMs = Int64((chunk.startSeconds * 1000).rounded())
+            segments.append(contentsOf: part.segments.map { Self.shifted($0, by: offsetMs) })
+
             completedChunks = index + 1
             onProgress(Double(completedChunks) / Double(total) * 100.0)
             // Lưu ngay sau mỗi đoạn: lỗi ở đoạn sau không làm mất công đã nhận dạng
-            onChunkCompleted?(completedChunks, total, parts.joined(separator: "\n\n"))
+            onChunkCompleted?(completedChunks, total, parts.joined(separator: "\n\n"), segments)
         }
 
-        return Outcome(text: parts.joined(separator: "\n\n"), chunkCount: total)
+        return Outcome(text: parts.joined(separator: "\n\n"), chunkCount: total, segments: segments)
     }
     // MARK: - Thử lại khi lỗi tạm thời
 
@@ -215,6 +232,15 @@ public final class ChunkedTranscriber {
             return "\(Int(rounded))s"
         }
         return String(format: "%.1fs", delay)
+    }
+
+    /// Dời mốc thời gian của một câu theo vị trí đoạn audio trong file gốc
+    private static func shifted(_ segment: TranscriptSegment, by offsetMs: Int64) -> TranscriptSegment {
+        TranscriptSegment(
+            startMs: segment.startMs + offsetMs,
+            endMs: segment.endMs + offsetMs,
+            text: segment.text
+        )
     }
 
 }
