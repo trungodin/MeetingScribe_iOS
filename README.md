@@ -31,8 +31,15 @@ MeetingScribe_iOS/
     ├── Presentation/
     │   ├── Home/HomeView.swift               # Màn hình danh sách cuộc họp
     │   ├── Record/RecordView.swift           # Màn hình ghi âm + Waveform thời gian thực
-    │   ├── Detail/DetailView.swift           # Chi tiết, phát lại, chuyển văn bản, tóm tắt
-    │   └── Settings/SettingsView.swift       # Cài đặt chọn Engine và nhập API Key
+    │   ├── Detail/DetailView.swift           # Chi tiết: bố cục chung + trạng thái
+    │   │   ├── DetailView+Audio.swift        # Thẻ trình phát, tua 5 giây, chia sẻ audio gốc
+    │   │   ├── DetailView+Transcript.swift   # Tab Văn bản gốc + sửa tay trước khi tóm tắt
+    │   │   ├── DetailView+Summary.swift      # Tab Tóm tắt AI (biên bản NĐ 30)
+    │   │   ├── DetailView+Processing.swift   # Thẻ tiến trình, huỷ job, chạy nền
+    │   │   ├── DetailView+AI.swift           # Chạy chuyển văn bản (ASR) / tóm tắt
+    │   │   └── DetailView+Export.swift       # Xuất Word NĐ 30 / PDF, chia sẻ file
+    │   ├── Settings/SettingsView.swift       # Cài đặt chọn Engine và nhập API Key
+    │   └── Settings/DiagnosticsView.swift    # Chẩn đoán: tự kiểm tra + xem log trên máy
     └── Resources/
         └── Templates/
             └── bien_ban_ND30.docx            # Mẫu biên bản Word chuẩn NĐ 30/2020/NĐ-CP
