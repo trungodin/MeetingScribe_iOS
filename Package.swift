@@ -15,29 +15,11 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
-            name: "whisper_c",
-            path: "whisper_c",
-            cSettings: [
-                .headerSearchPath("include"),
-                .headerSearchPath("."),
-                .define("WHISPER_VERSION", to: "\"1.7.4\""),
-                .define("GGML_USE_CPU")
-            ],
-            cxxSettings: [
-                .headerSearchPath("include"),
-                .headerSearchPath("."),
-                .define("WHISPER_VERSION", to: "\"1.7.4\""),
-                .define("GGML_USE_CPU")
-            ]
-        ),
-        .target(
             name: "MeetingScribe",
-            dependencies: ["whisper_c"],
             path: "MeetingScribe",
             resources: [
                 .process("Resources/Templates")
             ]
         )
-    ],
-    cxxLanguageStandard: .cxx17
+    ]
 )

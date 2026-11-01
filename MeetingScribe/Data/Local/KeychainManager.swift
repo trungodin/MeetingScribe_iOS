@@ -18,7 +18,7 @@ public class KeychainManager {
         case deepSeekApiKey = "KEY_DEEPSEEK_API_KEY"
         case groqApiKey = "KEY_GROQ_API_KEY"
         case geminiProxyUrl = "KEY_GEMINI_PROXY_URL"
-        case asrEngine = "KEY_ASR_ENGINE"          // "GROQ", "GEMINI", "WHISPER"
+        case asrEngine = "KEY_ASR_ENGINE"          // "GROQ" hoặc "GEMINI" (offline Whisper đã gỡ)
         case aiProvider = "KEY_AI_PROVIDER"        // "DEEPSEEK", "GEMINI"
         case defaultOrg = "KEY_DEFAULT_ORG"
         case defaultChair = "KEY_DEFAULT_CHAIR"

@@ -379,8 +379,8 @@ public struct DetailView: View {
             if let startedAt = processingStartedAt {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     HStack(spacing: 8) {
-                        // Whisper chỉ báo % sau mỗi 30 GIÂY audio (1 khối).
-                        // Với file ngắn (1 khối) hoặc khối đầu tiên, thanh % buộc phải
+                        // Máy chủ ASR chỉ trả % theo từng đoạn (chunk) audio.
+                        // Với file ngắn (1 đoạn) hoặc đoạn đầu tiên, thanh % buộc phải
                         // đứng yên vài giây. Spinner này cho biết app vẫn đang xử lý.
                         if Self.isWaitingForNextStep(lastProgressAt: lastProgressAt, now: context.date) {
                             ProgressView()
@@ -410,7 +410,7 @@ public struct DetailView: View {
         .cornerRadius(10)
     }
 
-    /// Đang chờ whisper xử lý nốt 1 khối 30 giây (chưa có mốc % mới) hay không
+    /// Đã lâu chưa có mốc % mới (đang chờ máy chủ ASR trả kết quả đoạn tiếp theo) hay không
     static func isWaitingForNextStep(lastProgressAt: Date?, now: Date) -> Bool {
         guard let last = lastProgressAt else { return false }
         return now.timeIntervalSince(last) >= 3
@@ -429,7 +429,7 @@ public struct DetailView: View {
             parts.append("còn ~" + shortDuration(remaining))
         }
 
-        // Chỉ báo khi thật sự lâu không nhích (whisper đang xử lý 1 khối nặng hoặc bị chặn)
+        // Chỉ báo khi thật sự lâu không nhích (đoạn audio dài hoặc mạng chậm)
         if let last = lastProgressAt {
             let idle = max(0, Int(now.timeIntervalSince(last)))
             if idle >= 60 {
@@ -789,7 +789,10 @@ public struct DetailView: View {
             errorMessage = "File âm thanh không tồn tại trên thiết bị."
             return
         }
-        let engine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
+        // Chế độ nhận dạng offline (Whisper) đã được gỡ bỏ. Bản cũ có thể còn lưu
+        // "WHISPER" trong Keychain → coi như Groq để app vẫn chạy bình thường.
+        let storedEngine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
+        let engine = (storedEngine == "GEMINI") ? "GEMINI" : "GROQ"
 
         isProcessing = true
         progressPercent = 10
@@ -800,22 +803,7 @@ public struct DetailView: View {
         processingTask = Task {
             do {
                 var text = ""
-                if engine == "WHISPER" {
-                    statusMessage = "Đang nhận dạng bằng Whisper Offline (trên máy)..."
-                    text = try await WhisperEngine.shared.transcribe(
-                        audioFileURL: audioURL,
-                        onProgress: { p in
-                            DispatchQueue.main.async {
-                                // Không cho thanh tiến trình chạy lùi (engine báo 8% đầu tiên)
-                                progressPercent = max(progressPercent, p)
-                                lastProgressAt = Date()
-                            }
-                        },
-                        onStatus: { stage in
-                            DispatchQueue.main.async { statusMessage = stage }
-                        }
-                    )
-                } else if engine == "GEMINI" {
+                if engine == "GEMINI" {
                     let key = KeychainManager.shared.get(key: .geminiApiKey)
                     let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
                     // Thiếu API Key là nguyên nhân phổ biến nhất của lỗi 403 PERMISSION_DENIED

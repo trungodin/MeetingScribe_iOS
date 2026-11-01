@@ -16,9 +16,8 @@ public struct SettingsView: View {
 
     // AI Provider & ASR Engine
     @State private var selectedAiProvider: String = "DEEPSEEK" // "DEEPSEEK" hoặc "GEMINI"
-    @State private var selectedAsrEngine: String = "GROQ"       // "GROQ", "GEMINI", "WHISPER"
+    @State private var selectedAsrEngine: String = "GROQ"       // "GROQ" hoặc "GEMINI"
 
-    @ObservedObject private var modelManager = WhisperModelManager.shared
 
     // API Keys
     @State private var groqKey: String = ""
@@ -85,7 +84,6 @@ public struct SettingsView: View {
                     Picker("Mô hình ASR", selection: $selectedAsrEngine) {
                         Text("Groq Turbo").tag("GROQ")
                         Text("Gemini").tag("GEMINI")
-                        Text("Whisper Offline").tag("WHISPER")
                     }
                     .pickerStyle(.segmented)
 
@@ -102,84 +100,10 @@ public struct SettingsView: View {
                                 .font(.caption)
                                 .padding(.top, 2)
                         }
-                    } else if selectedAsrEngine == "GEMINI" {
+                    } else {
                         Text("Google Gemini ASR Flash (Hỗ trợ audio trực tiếp).")
                             .font(.caption2)
                             .foregroundColor(.secondary)
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Whisper Offline (Không cần mạng Internet)")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            Text("Nhận dạng trực tiếp trên chip của iPhone. Cần tải model GGML ở mục bên dưới.")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-
-                // MARK: 2.1 Quản lý Model Whisper Offline
-                Section(header: Label("Model Whisper Offline (Trên máy)", systemImage: "arrow.down.circle")) {
-                    ForEach(WhisperModelManager.Variant.allCases) { variant in
-                        let isReady = modelManager.isModelReady(for: variant)
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(variant.displayName)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text(variant.note)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Spacer()
-
-                            if isReady {
-                                HStack(spacing: 8) {
-                                    Text("Đã có (\(variant.approxSizeText))")
-                                        .font(.caption2)
-                                        .foregroundColor(.green)
-
-                                    Button("Xóa", role: .destructive) {
-                                        let path = modelManager.getModelPath(for: variant)
-                                        try? FileManager.default.removeItem(at: path)
-                                        modelManager.refreshModelStatus()
-                                    }
-                                    .font(.caption)
-                                }
-                            } else {
-                                Button(action: { modelManager.downloadModel(variant: variant) }) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "arrow.down")
-                                        Text("Tải (\(variant.approxSizeText))")
-                                    }
-                                    .font(.caption)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color.blue)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(8)
-                                }
-                                .disabled(modelManager.isDownloading)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-
-                    if modelManager.isDownloading {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ProgressView(value: modelManager.downloadProgress, total: 1.0)
-                            Text("Đang tải model: \(Int(modelManager.downloadProgress * 100))%")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
-                        }
-                        .padding(.vertical, 4)
-                    }
-
-                    if let err = modelManager.downloadError {
-                        Text(err)
-                            .font(.caption2)
-                            .foregroundColor(.red)
                     }
                 }
 
@@ -301,7 +225,14 @@ public struct SettingsView: View {
 
     private func loadSettings() {
         selectedAiProvider = KeychainManager.shared.get(key: .aiProvider, defaultValue: "DEEPSEEK")
-        selectedAsrEngine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
+
+        // Chế độ nhận dạng offline (Whisper) đã được gỡ bỏ: bản cũ có thể lưu "WHISPER"
+        // trong Keychain, khi đó tự chuyển về Groq (online) và ghi đè lại cấu hình.
+        let storedAsrEngine = KeychainManager.shared.get(key: .asrEngine, defaultValue: "GROQ")
+        selectedAsrEngine = (storedAsrEngine == "GEMINI") ? "GEMINI" : "GROQ"
+        if storedAsrEngine != selectedAsrEngine {
+            KeychainManager.shared.save(key: .asrEngine, value: selectedAsrEngine)
+        }
 
         groqKey = KeychainManager.shared.get(key: .groqApiKey)
         deepSeekKey = KeychainManager.shared.get(key: .deepSeekApiKey)

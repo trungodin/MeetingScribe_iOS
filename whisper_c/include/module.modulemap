@@ -1,5 +1,0 @@
-module whisper_c {
-    header "whisper_bridge.h"
-    header "whisper.h"
-    export *
-}
