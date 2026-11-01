@@ -14,7 +14,7 @@ public class AudioImporter {
 
     private init() {}
 
-    public func importAudioFile(from sourceURL: URL) throws -> (fileURL: URL, durationMs: Int64) {
+    public func importAudioFile(from sourceURL: URL) async throws -> (fileURL: URL, durationMs: Int64) {
         let isSecured = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if isSecured {
@@ -45,10 +45,15 @@ public class AudioImporter {
         }
         try fileManager.copyItem(at: sourceURL, to: targetURL)
 
-        // Đo thời lượng audio
+        // Đo thời lượng audio.
+        // Dùng `load(.duration)` (iOS 16+) thay cho `asset.duration` vì thuộc tính cũ đã bị Apple
+        // đánh dấu deprecated và có thể chặn kết xuất/App Store.
         let asset = AVURLAsset(url: targetURL)
-        let durationSeconds = CMTimeGetSeconds(asset.duration)
-        let durationMs = Int64(max(0, durationSeconds.isNaN ? 0 : durationSeconds * 1000))
+        var durationMs: Int64 = 0
+        if let duration = try? await asset.load(.duration) {
+            let seconds = CMTimeGetSeconds(duration)
+            durationMs = Int64(max(0, seconds.isFinite ? seconds * 1000 : 0))
+        }
 
         return (targetURL, durationMs)
     }

@@ -273,7 +273,7 @@ public struct HomeView: View {
         isImporting = true
         Task {
             do {
-                let result = try AudioImporter.shared.importAudioFile(from: url)
+                let result = try await AudioImporter.shared.importAudioFile(from: url)
                 let formatter = DateFormatter()
                 formatter.dateFormat = "dd/MM/yyyy HH:mm"
                 let title = "Ghi âm đã nhập \(formatter.string(from: Date()))"

@@ -46,6 +46,7 @@ public class MeetingStore: ObservableObject {
             try? FileManager.default.moveItem(at: storageURL, to: backupURL)
             self.meetings = []
             self.storageWarning = "Không đọc được dữ liệu cuộc họp (\(error.localizedDescription)). File cũ đã được sao lưu thành \(backupName)."
+            AppLog.error("Database hỏng, đã sao lưu thành \(backupName)", .store, error: error)
         }
     }
 
@@ -54,7 +55,7 @@ public class MeetingStore: ObservableObject {
             let data = try JSONEncoder().encode(meetings)
             try data.write(to: storageURL, options: .atomic)
         } catch {
-            print("Lỗi lưu meetings: \(error.localizedDescription)")
+            AppLog.error("Không ghi được meetings_database.json (\(meetings.count) cuộc họp)", .store, error: error)
         }
     }
 

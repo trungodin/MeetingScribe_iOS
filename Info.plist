@@ -6,6 +6,12 @@
 	<string>MeetingScribe VN</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Ứng dụng cần sử dụng Microphone để ghi âm cuộc họp.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

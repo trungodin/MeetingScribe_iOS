@@ -761,12 +761,14 @@ public struct DetailView: View {
                     loadMeetingData()
 
                     isProcessing = false
+                    AppLog.info("Đã xuất Word NĐ 30: \(docxURL.lastPathComponent)", .export)
                     ShareSheetPresenter.present(items: [docxURL])
                 }
             } catch {
                 await MainActor.run {
                     isProcessing = false
                     errorMessage = "Lỗi xuất file Word: \(error.localizedDescription)"
+                    AppLog.error("Xuất Word thất bại", .export, error: error)
                 }
             }
         }
@@ -786,7 +788,7 @@ public struct DetailView: View {
             self.audioPlayer = player
             self.totalDuration = player.duration
         } catch {
-            print("setupAudioPlayer error: \(error)")
+            AppLog.error("Không khởi tạo được trình phát audio", .record, error: error)
         }
     }
 
@@ -801,7 +803,7 @@ public struct DetailView: View {
             try session.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
         } catch {
-            print("AVAudioSession setCategory error: \(error)")
+            AppLog.error("Không đặt được AVAudioSession .playback", .record, error: error)
         }
 
         if isPlaying {
@@ -949,12 +951,15 @@ public struct DetailView: View {
         let organization = KeychainManager.shared.get(key: .defaultOrg, defaultValue: "")
         do {
             let url = try PdfExporter.shared.exportToPdf(summary: summary, organizationName: organization)
+            AppLog.info("Đã xuất PDF: \(url.lastPathComponent)", .export)
             guard ShareSheetPresenter.presentFile(at: url) else {
                 errorMessage = "Không mở được bảng chia sẻ cho file PDF."
+                AppLog.warning("Có file PDF nhưng không mở được bảng chia sẻ", .export)
                 return
             }
         } catch {
             errorMessage = "Lỗi xuất PDF: \(error.localizedDescription)"
+            AppLog.error("Xuất PDF thất bại", .export, error: error)
         }
     }
 
@@ -1087,6 +1092,11 @@ public struct DetailView: View {
                     statusMessage = outcome.chunkCount > 1
                         ? "Đã chuyển văn bản xong (\(outcome.chunkCount) đoạn)."
                         : "Đã chuyển văn bản thành công!"
+                    AppLog.info(
+                        "Chuyển văn bản xong: \(outcome.chunkCount) đoạn, "
+                        + "\(finalTranscript.count) ký tự, \(outcome.segments.count) mốc thời gian",
+                        .transcribe
+                    )
                     endProcessingBackgroundTask()
                 }
             } catch is CancellationError {
@@ -1112,6 +1122,7 @@ public struct DetailView: View {
                     // Câu lỗi tiếng Việt đã phân loại + nhắc các đoạn đã lưu (nếu có)
                     errorMessage = AiFailureClassifier.message(for: error)
                         + Self.savedChunkInfo(store.meetings.first { $0.id == m.id })
+                    AppLog.error("Chuyển văn bản thất bại", .transcribe, error: error)
                     endProcessingBackgroundTask()
                 }
             }

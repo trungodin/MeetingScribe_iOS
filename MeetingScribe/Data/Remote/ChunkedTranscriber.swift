@@ -212,12 +212,22 @@ public final class ChunkedTranscriber {
                 if failure == .cancelled { throw CancellationError() }
 
                 guard failure.isRetryable, currentAttempt < maxAttempts else {
-                    throw makeError(failure, currentAttempt)
+                    let finalError = makeError(failure, currentAttempt)
+                    AppLog.error(
+                        "Dừng sau \(currentAttempt) lần thử (\(failure.shortLabel))",
+                        .transcribe,
+                        error: finalError
+                    )
+                    throw finalError
                 }
 
                 let delay = policy.delays.isEmpty
                     ? 2.0
                     : policy.delays[min(currentAttempt - 1, policy.delays.count - 1)]
+                AppLog.warning(
+                    "Lần thử \(currentAttempt) lỗi (\(failure.shortLabel)) — chờ \(Self.describe(delay)) rồi thử lại",
+                    .transcribe
+                )
                 onRetry(currentAttempt, delay, failure)
                 // Ngủ giữa 2 lần thử; bị huỷ thì Task.sleep ném CancellationError
                 try await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))

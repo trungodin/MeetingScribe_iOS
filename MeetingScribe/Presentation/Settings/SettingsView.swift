@@ -45,6 +45,9 @@ public struct SettingsView: View {
     @State private var showCleanupExportedConfirm = false
     @State private var showCleanupOldConfirm = false
 
+    /// Màn hình Chẩn đoán (tự kiểm tra + log) — mở dạng sheet để không lồng NavigationStack
+    @State private var showDiagnostics = false
+
     /// Tập cuộc họp sẽ dọn audio (id + tổng dung lượng) để hiện trên nút và hộp xác nhận
     struct CleanupTarget: Equatable {
         var ids: [Int64] = []
@@ -255,6 +258,30 @@ public struct SettingsView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+
+                // MARK: 5. Hỗ trợ & chẩn đoán
+                Section(
+                    header: Label("Hỗ trợ", systemImage: "stethoscope"),
+                    footer: Text("Tự kiểm tra không gọi mạng: chỉ chạy các phép kiểm tra nội bộ để phát hiện sớm lỗi phân loại, mốc thời gian, xuất PDF/Word và đọc dữ liệu cũ.")
+                ) {
+                    Button {
+                        showDiagnostics = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Chẩn đoán ứng dụng")
+                                    .foregroundColor(.primary)
+                                Text("Tự kiểm tra · xem log lỗi gần đây")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
             .navigationTitle("Cài đặt hệ thống")
             .navigationBarTitleDisplayMode(.inline)
@@ -299,6 +326,9 @@ public struct SettingsView: View {
             .onAppear {
                 loadSettings()
                 refreshStorage()
+            }
+            .sheet(isPresented: $showDiagnostics) {
+                DiagnosticsView()
             }
         }
     }
