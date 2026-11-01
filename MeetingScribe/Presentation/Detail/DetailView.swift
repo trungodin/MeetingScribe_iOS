@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AVFoundation
+import UIKit
 
 public struct DetailView: View {
     let meetingId: Int64
@@ -33,6 +34,13 @@ public struct DetailView: View {
     @State private var processingStartedAt: Date?
     // Lần cuối nhận được mốc tiến trình mới (để biết app còn "sống" hay đã treo)
     @State private var lastProgressAt: Date?
+
+    // Giữ app được iOS cho chạy tiếp khi người dùng chuyển sang app khác giữa lúc AI đang xử lý
+    @State private var processingBgTaskId: UIBackgroundTaskIdentifier = .invalid
+
+    // Sửa tay văn bản ASR (tên riêng, số liệu luôn có lỗi → phải sửa được trước khi tóm tắt)
+    @State private var isEditingTranscript = false
+    @State private var transcriptDraft = ""
 
     // Xuất file & Edit trước khi xuất
     @State private var showingEditExportSheet = false
@@ -227,14 +235,51 @@ public struct DetailView: View {
                             .fontWeight(.bold)
                             .foregroundColor(.secondary)
                         Spacer()
+
+                        if !isEditingTranscript {
+                            Button("Sửa") { startEditingTranscript(meeting) }
+                                .font(.caption)
+                                .disabled(isProcessing)
+                        }
+
                         Button("Chuyển lại", action: startTranscribe)
                             .font(.caption)
+                            .disabled(isProcessing)
                     }
 
-                    Text(meeting.transcript)
-                        .font(.body)
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
+                    if isEditingTranscript {
+                        // ASR luôn sai tên riêng/số liệu → cho sửa tay trước khi tóm tắt để biên bản Word đúng
+                        TextEditor(text: $transcriptDraft)
+                            .font(.body)
+                            .lineSpacing(2)
+                            .frame(minHeight: 260)
+                            .padding(6)
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(8)
+
+                        HStack {
+                            Button("Huỷ", action: cancelEditingTranscript)
+                                .font(.caption)
+
+                            Spacer()
+
+                            Button(action: { saveTranscript(meeting) }) {
+                                Text("Lưu văn bản")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                    } else {
+                        Text(meeting.transcript)
+                            .font(.body)
+                            .lineSpacing(4)
+                            .textSelection(.enabled)
+                    }
                 }
             }
             .padding(16)
@@ -467,6 +512,12 @@ public struct DetailView: View {
         isProcessing = false
         progressPercent = 0
         statusMessage = "Đã huỷ."
+        // Không để item kẹt ở trạng thái "đang xử lý" khi người dùng bấm Huỷ
+        if let m = meeting {
+            store.updateStatus(id: m.id, status: Self.idleStatus(for: m))
+            loadMeetingData()
+        }
+        endProcessingBackgroundTask()
     }
 
     // MARK: - 4. Bottom Action Bar
@@ -757,7 +808,7 @@ public struct DetailView: View {
             errorMessage = "Chưa có file Word. Vui lòng bấm \"Xuất Word NĐ30\" trước."
             return
         }
-        let url = URL(fileURLWithPath: m.exportFilePath)
+        let url = m.resolvedExportURL ?? URL(fileURLWithPath: m.exportFilePath)
         guard ShareSheetPresenter.presentFile(at: url) else {
             errorMessage = "File Word không còn trên thiết bị. Vui lòng xuất lại."
             return
@@ -795,82 +846,109 @@ public struct DetailView: View {
         let engine = (storedEngine == "GEMINI") ? "GEMINI" : "GROQ"
 
         isProcessing = true
-        progressPercent = 10
+        progressPercent = 5
         processingStartedAt = Date()
         lastProgressAt = Date()
         processingTask?.cancel()
+        // Ghi trạng thái xuống DB: rời màn hình hay app bị kill vẫn biết job đang dở
+        store.updateStatus(id: m.id, status: .transcribing)
+        // Xin iOS thêm thời gian chạy nền để job không chết khi người dùng chuyển sang app khác
+        beginProcessingBackgroundTask()
+
+        let previousStatus = Self.idleStatus(for: m)
 
         processingTask = Task {
             do {
-                var text = ""
-                if engine == "GEMINI" {
-                    let key = KeychainManager.shared.get(key: .geminiApiKey)
-                    let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
-                    // Thiếu API Key là nguyên nhân phổ biến nhất của lỗi 403 PERMISSION_DENIED
-                    // ("Method doesn't allow unregistered callers"). Báo ngay, rõ ràng.
-                    if AiEndpoints.isDirectCall(proxyBaseUrl: proxy),
-                       KeychainManager.shared.sanitize(key).isEmpty {
-                        throw NSError(
-                            domain: "Settings",
-                            code: 401,
-                            userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Gemini API Key.\nVào Cài đặt ➔ Google Gemini để dán API Key (lấy tại aistudio.google.com/apikey) rồi bấm Lưu."]
+                // Engine chọn 1 lần, dùng chung cho mọi đoạn
+                let transcribeOneChunk: (URL, @escaping (Int) -> Void) async throws -> String = { chunkURL, onChunkProgress in
+                    if engine == "GEMINI" {
+                        let key = KeychainManager.shared.get(key: .geminiApiKey)
+                        let proxy = KeychainManager.shared.get(key: .geminiProxyUrl)
+                        // Thiếu API Key là nguyên nhân phổ biến nhất của lỗi 403 PERMISSION_DENIED
+                        // ("Method doesn't allow unregistered callers"). Báo ngay, rõ ràng.
+                        if AiEndpoints.isDirectCall(proxyBaseUrl: proxy),
+                           KeychainManager.shared.sanitize(key).isEmpty {
+                            throw NSError(
+                                domain: "Settings",
+                                code: 401,
+                                userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Gemini API Key.\nVào Cài đặt ➔ Google Gemini để dán API Key (lấy tại aistudio.google.com/apikey) rồi bấm Lưu."]
+                            )
+                        }
+                        return try await GeminiService.shared.transcribe(
+                            audioFileURL: chunkURL,
+                            apiKey: key,
+                            proxyUrl: proxy,
+                            onProgress: onChunkProgress
                         )
-                    }
-                    statusMessage = "Đang chuyển văn bản qua Google Gemini Flash..."
-                    text = try await GeminiService.shared.transcribe(
-                        audioFileURL: audioURL,
-                        apiKey: key,
-                        proxyUrl: proxy
-                    ) { p in
-                        DispatchQueue.main.async {
-                            progressPercent = Double(p)
-                            lastProgressAt = Date()
+                    } else {
+                        // Groq Whisper
+                        let key = KeychainManager.shared.get(key: .groqApiKey)
+                        guard !key.isEmpty else {
+                            throw NSError(domain: "Settings", code: 401, userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Groq API Key trong Cài đặt."])
                         }
-                    }
-                } else {
-                    // Groq Whisper
-                    let key = KeychainManager.shared.get(key: .groqApiKey)
-                    guard !key.isEmpty else {
-                        throw NSError(domain: "Settings", code: 401, userInfo: [NSLocalizedDescriptionKey: "Chưa nhập Groq API Key trong Cài đặt."])
-                    }
-                    statusMessage = "Đang nhận dạng qua Groq Whisper large-v3-turbo..."
-                    text = try await GroqAsrService.shared.transcribe(
-                        audioFileURL: audioURL,
-                        apiKey: key
-                    ) { p in
-                        DispatchQueue.main.async {
-                            progressPercent = Double(p)
-                            lastProgressAt = Date()
-                        }
+                        return try await GroqAsrService.shared.transcribe(
+                            audioFileURL: chunkURL,
+                            apiKey: key,
+                            onProgress: onChunkProgress
+                        )
                     }
                 }
 
+                // File dài được cắt thành nhiều đoạn ≤ 10 phút: tránh giới hạn 25MB của Groq,
+                // ~18MB của Gemini và tránh nạp cả file ghi âm vào RAM.
+                let outcome = try await ChunkedTranscriber.shared.transcribe(
+                    audioFileURL: audioURL,
+                    onStatus: { message in
+                        DispatchQueue.main.async {
+                            statusMessage = message
+                            lastProgressAt = Date()
+                        }
+                    },
+                    onProgress: { percent in
+                        DispatchQueue.main.async {
+                            progressPercent = max(5, min(99, percent))
+                            lastProgressAt = Date()
+                        }
+                    },
+                    transcribeChunk: transcribeOneChunk
+                )
+
                 await MainActor.run {
-                    let finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    let finalTranscript = outcome.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? "(Không nhận diện được giọng nói trong đoạn ghi âm này)"
-                        : text
+                        : outcome.text
                     store.updateTranscript(id: m.id, transcript: finalTranscript)
                     loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     progressPercent = 100
-                    statusMessage = "Đã chuyển văn bản thành công!"
+                    statusMessage = outcome.chunkCount > 1
+                        ? "Đã chuyển văn bản xong (\(outcome.chunkCount) đoạn)."
+                        : "Đã chuyển văn bản thành công!"
+                    endProcessingBackgroundTask()
                 }
             } catch is CancellationError {
                 await MainActor.run {
+                    // Huỷ giữa chừng: trả item về trạng thái trước đó, không để kẹt "Đang chuyển văn bản..."
+                    store.updateStatus(id: m.id, status: previousStatus)
+                    loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     progressPercent = 0
                     statusMessage = "Đã huỷ."
+                    endProcessingBackgroundTask()
                 }
             } catch {
                 await MainActor.run {
+                    store.updateStatus(id: m.id, status: previousStatus)
+                    loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     errorMessage = error.localizedDescription
+                    endProcessingBackgroundTask()
                 }
             }
         }
@@ -885,6 +963,10 @@ public struct DetailView: View {
         processingStartedAt = Date()
         lastProgressAt = Date()
         processingTask?.cancel()
+        store.updateStatus(id: m.id, status: .summarizing)
+        beginProcessingBackgroundTask()
+
+        let previousStatus = Self.idleStatus(for: m)
 
         processingTask = Task {
             do {
@@ -929,23 +1011,92 @@ public struct DetailView: View {
                     processingTask = nil
                     selectedTab = 1
                     statusMessage = "Đã tóm tắt thành công!"
+                    endProcessingBackgroundTask()
                 }
             } catch is CancellationError {
                 await MainActor.run {
+                    // Huỷ giữa chừng: trả item về trạng thái trước đó, không để kẹt "Đang tóm tắt..."
+                    store.updateStatus(id: m.id, status: previousStatus)
+                    loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     progressPercent = 0
                     statusMessage = "Đã huỷ."
+                    endProcessingBackgroundTask()
                 }
             } catch {
                 await MainActor.run {
+                    store.updateStatus(id: m.id, status: previousStatus)
+                    loadMeetingData()
                     isProcessing = false
                     processingStartedAt = nil
                     processingTask = nil
                     errorMessage = error.localizedDescription
+                    endProcessingBackgroundTask()
                 }
             }
         }
+    }
+
+    // MARK: - Trạng thái & chạy nền
+
+    /// Trạng thái "nghỉ" suy ra từ dữ liệu hiện có (dùng khi huỷ/thất bại để item không kẹt ở trạng thái đang xử lý)
+    static func idleStatus(for meeting: Meeting) -> MeetingStatus {
+        if !meeting.summaryJson.isEmpty {
+            return meeting.exportFilePath.isEmpty ? .summarized : .exported
+        }
+        return meeting.transcript.isEmpty ? .recorded : .transcribed
+    }
+
+    /// Xin iOS thêm thời gian chạy nền: nếu người dùng chuyển app/khoá máy giữa lúc AI đang xử lý,
+    /// job vẫn có cơ hội hoàn tất thay vì bị treo im lặng.
+    private func beginProcessingBackgroundTask() {
+        endProcessingBackgroundTask()
+        processingBgTaskId = UIApplication.shared.beginBackgroundTask(withName: "MeetingScribe.AI") {
+            // Hết thời gian chạy nền: huỷ job một cách có kiểm soát, trạng thái item được trả lại
+            // như trước để người dùng có thể bấm chạy lại.
+            processingTask?.cancel()
+            endProcessingBackgroundTask()
+        }
+    }
+
+    private func endProcessingBackgroundTask() {
+        guard processingBgTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(processingBgTaskId)
+        processingBgTaskId = .invalid
+    }
+
+    // MARK: - Sửa tay văn bản
+
+    private func startEditingTranscript(_ meeting: Meeting) {
+        transcriptDraft = meeting.transcript
+        isEditingTranscript = true
+    }
+
+    private func cancelEditingTranscript() {
+        isEditingTranscript = false
+        transcriptDraft = ""
+    }
+
+    private func saveTranscript(_ meeting: Meeting) {
+        let text = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            errorMessage = "Văn bản không được để trống."
+            return
+        }
+        guard text != meeting.transcript else {
+            cancelEditingTranscript()
+            return
+        }
+
+        // Giữ nguyên trạng thái hiện tại: đây chỉ là sửa lỗi nhận dạng, không phải job mới
+        store.updateTranscript(id: meeting.id, transcript: text, status: meeting.status)
+        isEditingTranscript = false
+        transcriptDraft = ""
+        loadMeetingData()
+        statusMessage = meeting.summaryJson.isEmpty
+            ? "Đã lưu văn bản đã sửa."
+            : "Đã lưu văn bản đã sửa. Nên tóm tắt lại để biên bản khớp nội dung mới."
     }
 }

@@ -14,6 +14,9 @@ public class MeetingStore: ObservableObject {
 
     @Published public var meetings: [Meeting] = []
 
+    /// Cảnh báo khi database JSON bị hỏng (file cũ đã được sao lưu) để UI báo cho người dùng
+    @Published public var storageWarning: String?
+
     private var storageURL: URL {
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         return paths[0].appendingPathComponent("meetings_database.json")
@@ -21,6 +24,8 @@ public class MeetingStore: ObservableObject {
 
     public init() {
         loadMeetings()
+        // Job AI có thể bị iOS kill giữa chừng (app xuống nền quá lâu) → trả item về trạng thái ổn định
+        recoverInterruptedJobs()
     }
 
     public func loadMeetings() {
@@ -34,8 +39,13 @@ public class MeetingStore: ObservableObject {
             self.meetings = try JSONDecoder().decode([Meeting].self, from: data)
                 .sorted { $0.createdAt > $1.createdAt }
         } catch {
-            print("Lỗi load meetings: \(error.localizedDescription)")
+            // KHÔNG xoá dữ liệu người dùng: đổi tên file hỏng thành bản backup rồi mới reset.
+            // Nếu chỉ gán meetings = [] thì lần saveMeetings() kế tiếp sẽ ghi đè mất toàn bộ danh sách.
+            let backupName = "meetings_database.corrupt-\(Int(Date().timeIntervalSince1970)).json"
+            let backupURL = storageURL.deletingLastPathComponent().appendingPathComponent(backupName)
+            try? FileManager.default.moveItem(at: storageURL, to: backupURL)
             self.meetings = []
+            self.storageWarning = "Không đọc được dữ liệu cuộc họp (\(error.localizedDescription)). File cũ đã được sao lưu thành \(backupName)."
         }
     }
 
@@ -59,10 +69,42 @@ public class MeetingStore: ObservableObject {
         return m.id
     }
 
-    public func updateTranscript(id: Int64, transcript: String) {
+    /// Cập nhật văn bản. `status` = nil → đánh dấu "đã chuyển văn bản";
+    /// truyền status hiện tại khi người dùng chỉ sửa lỗi nhận dạng để không mất mốc "đã tóm tắt".
+    public func updateTranscript(id: Int64, transcript: String, status: MeetingStatus? = nil) {
         if let idx = meetings.firstIndex(where: { $0.id == id }) {
             meetings[idx].transcript = transcript
-            meetings[idx].status = .transcribed
+            meetings[idx].status = status ?? .transcribed
+            saveMeetings()
+        }
+    }
+
+    /// Đổi tên cuộc họp (tên do máy tự sinh lúc ghi âm nên cần cho người dùng sửa lại)
+    public func rename(id: Int64, title: String) {
+        let newTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newTitle.isEmpty else { return }
+        if let idx = meetings.firstIndex(where: { $0.id == id }) {
+            meetings[idx].title = newTitle
+            saveMeetings()
+        }
+    }
+
+    /// Trả các job đang dở (app bị kill khi đang chuyển văn bản/tóm tắt) về trạng thái ổn định
+    public func recoverInterruptedJobs() {
+        var changed = false
+        for idx in meetings.indices {
+            switch meetings[idx].status {
+            case .transcribing:
+                meetings[idx].status = meetings[idx].transcript.isEmpty ? .recorded : .transcribed
+                changed = true
+            case .summarizing:
+                meetings[idx].status = meetings[idx].summaryJson.isEmpty ? .transcribed : .summarized
+                changed = true
+            default:
+                break
+            }
+        }
+        if changed {
             saveMeetings()
         }
     }
@@ -84,11 +126,13 @@ public class MeetingStore: ObservableObject {
 
     public func delete(id: Int64) {
         if let meeting = meetings.first(where: { $0.id == id }) {
-            if !meeting.audioFilePath.isEmpty {
-                try? FileManager.default.removeItem(atPath: meeting.audioFilePath)
+            // Dùng resolved*URL: đường dẫn lưu trong DB chứa UUID container cũ, sau khi cài lại/cập nhật app
+            // sẽ không còn đúng → xoá theo path thô thì file nằm lại vĩnh viễn và làm đầy bộ nhớ máy.
+            if let audioURL = meeting.resolvedAudioURL {
+                try? FileManager.default.removeItem(at: audioURL)
             }
-            if !meeting.exportFilePath.isEmpty {
-                try? FileManager.default.removeItem(atPath: meeting.exportFilePath)
+            if let exportURL = meeting.resolvedExportURL {
+                try? FileManager.default.removeItem(at: exportURL)
             }
             meetings.removeAll { $0.id == id }
             saveMeetings()

@@ -16,6 +16,8 @@ public struct HomeView: View {
     @State private var selectedMeeting: Meeting?
     @State private var searchQuery: String = ""
     @State private var meetingToDelete: Meeting?
+    @State private var meetingToRename: Meeting?
+    @State private var renameDraft: String = ""
     @State private var errorMessage: String?
     @State private var isImporting = false
 
@@ -39,6 +41,11 @@ public struct HomeView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    // Cảnh báo khi database JSON bị hỏng (file cũ đã được sao lưu, không mất dữ liệu)
+                    if let warning = store.storageWarning {
+                        storageWarningBanner(warning)
+                    }
+
                     // Thanh tìm kiếm cuộc họp
                     searchBarView
 
@@ -108,6 +115,23 @@ public struct HomeView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .alert("Đổi tên cuộc họp", isPresented: Binding(
+                get: { meetingToRename != nil },
+                set: { if !$0 { meetingToRename = nil } }
+            )) {
+                TextField("Tên cuộc họp", text: $renameDraft)
+                Button("Lưu") {
+                    if let m = meetingToRename {
+                        store.rename(id: m.id, title: renameDraft)
+                    }
+                    meetingToRename = nil
+                }
+                Button("Huỷ", role: .cancel) {
+                    meetingToRename = nil
+                }
+            } message: {
+                Text("Đặt tên dễ nhớ để tìm lại cuộc họp nhanh hơn.")
+            }
             .onAppear {
                 store.loadMeetings()
             }
@@ -163,6 +187,15 @@ public struct HomeView: View {
                     .onTapGesture {
                         selectedMeeting = meeting
                     }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            renameDraft = meeting.title
+                            meetingToRename = meeting
+                        } label: {
+                            Label("Đổi tên", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
                             meetingToDelete = meeting
@@ -173,6 +206,31 @@ public struct HomeView: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    /// Banner cảnh báo dữ liệu: database JSON hỏng đã được backup (thay vì im lặng xoá trắng)
+    private func storageWarningBanner(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+
+            Button(action: { store.storageWarning = nil }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(10)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     private var floatingControls: some View {

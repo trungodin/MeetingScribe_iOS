@@ -90,5 +90,27 @@ public struct Meeting: Identifiable, Codable, Equatable, Hashable {
 
         return nil
     }
+
+    /// Trả về đường dẫn file Word đã xuất trên thiết bị hiện tại (cùng lý do: UUID container thay đổi sau mỗi lần build/update app)
+    public var resolvedExportURL: URL? {
+        guard !exportFilePath.isEmpty else { return nil }
+        let currentUrl = URL(fileURLWithPath: exportFilePath)
+        if FileManager.default.fileExists(atPath: currentUrl.path) {
+            return currentUrl
+        }
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let inExports = docs[0].appendingPathComponent("exports").appendingPathComponent(currentUrl.lastPathComponent)
+        if FileManager.default.fileExists(atPath: inExports.path) {
+            return inExports
+        }
+
+        let inDocs = docs[0].appendingPathComponent(currentUrl.lastPathComponent)
+        if FileManager.default.fileExists(atPath: inDocs.path) {
+            return inDocs
+        }
+
+        return nil
+    }
 }
 
